@@ -1,0 +1,11 @@
+{
+  "name": "aaharadhipa-medication-tracker",
+  "version": "1.0.0",
+  "description": "Medicine tracker for prescribed medications",
+  "scripts": {
+    "test": "node test_runner.js",
+    "test:functional": "node test_runner.js --grep"
+  },
+  "keywords": ["medication", "health", "tracker"],
+  "license": "MIT"
+}
