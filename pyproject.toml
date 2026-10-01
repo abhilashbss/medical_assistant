@@ -1,0 +1,108 @@
+[tool.ruff]
+
+select = ["E", "F", "I", "B", "W", "A", "N", "UP", "COM", "DTZ", "TID", "PD", "C90", "ANN", "D", "RUF"]
+ignore = ["D212", "D203"]
+
+fixable = ["I", "RUF100"]
+unfixable = []
+
+# Exclude a variety of commonly ignored directories.
+exclude = [
+    ".bzr",
+    ".direnv",
+    ".eggs",
+    ".git",
+    ".hg",
+    ".mypy_cache",
+    ".nox",
+    ".pants.d",
+    ".pytype",
+    ".ruff_cache",
+    ".svn",
+    ".tox",
+    ".venv",
+    "__pypackages__",
+    "_build",
+    "buck-out",
+    "build",
+    "dist",
+    "node_modules",
+    "venv",
+]
+
+# Same as Black.
+line-length = 88
+
+# Allow unused variables when underscore-prefixed.
+dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+
+target-version = "py38"
+
+[tool.ruff.mccabe]
+# Unlike Flake8, default to a complexity level of 10.
+max-complexity = 10
+
+
+[tool.pyright]
+include = ["composer-2/"]
+typeCheckingMode = "basic"
+defineConstant = { DEBUG = true }
+
+reportMissingImports = false
+reportMissingTypeStubs = false
+reportOptionalOperand = false
+reportUnboundVariable = false
+reportUnusedExpression = false
+reportMissingModuleSource = true
+
+pythonVersion = "3.8"
+pythonPlatform = "Linux"
+
+[tool.poetry]
+name = "data-composer"
+description = "Airflow code."
+readme = "README.md"
+version = "0.1.0"
+authors = [
+    "Data Team <data-eng@chartboost.com>",
+]
+
+[tool.poetry.dependencies]
+python = "^3.8"
+sqlalchemy="1.4.27"
+python-dateutil="2.8.2"
+pytz = "^2023.3"
+urllib3 = "1.26.14"
+requests = "^2.30.0"
+pyright = "1.1.311"
+#pre-commit = "3.2.2"
+#black = "23.1.0"
+#ruff = "0.0.257"
+#sqlfluff = "2.1.0"
+
+[tool.poetry.group.dev.dependencies]
+poethepoet = "^0.21.0"
+
+[tool.poe.tasks]
+    [tool.poe.tasks.sqlfluff-plugin]
+    help = "Install SQLFluff plugin"
+    cmd = "pip install -e ."
+    cwd = "composer-2/plugins/sqlfluff"
+
+[tool.sqlfluff.core]
+dialect = "bigquery"
+rules = ["LT02","CP01","AM05","AM06","CP03","LT01","LT04","LT05","LT06","LT13","RF04","AL03","AL02","AL01","CV06","InsertIntoViolations_S001","DeleteFromViolations_S002"]
+max_line_length = 120
+ignore = "templating"
+large_file_skip_byte_limit = 0
+
+[tool.sqlfluff.rules.capitalisation.functions]
+extended_capitalisation_policy = "upper"
+[tool.sqlfluff.rules.capitalisation.keywords]
+capitalisation_policy = "upper"
+[tool.sqlfluff.rules.convention.terminator]
+require_final_semicolon = true
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
