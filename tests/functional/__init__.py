@@ -1,0 +1,1 @@
+"""Functional tests for medication tracker."""
