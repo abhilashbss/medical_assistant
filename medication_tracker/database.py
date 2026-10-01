@@ -1,5 +1,6 @@
 """Database connection and management."""
 
+import os
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
@@ -24,6 +25,7 @@ class Database:
     def connect(self) -> sqlite3.Connection:
         """Create and return a database connection."""
         if self._connection is None:
+            self.db_path = os.environ.get("DB_PATH", self.db_path)
             self._connection = sqlite3.connect(self.db_path)
             self._connection.row_factory = sqlite3.Row
             # Enable foreign keys
@@ -100,6 +102,7 @@ class Database:
             # Create indexes for dose_records
             conn.execute("CREATE INDEX IF NOT EXISTS idx_dose_records_medication_id ON dose_records(medication_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_dose_records_date ON dose_records(date)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_dose_records_medication_date ON dose_records(medication_id, date DESC)")
 
 
 def get_database(db_path: Optional[str] = None) -> Database:

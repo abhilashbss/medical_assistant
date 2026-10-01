@@ -1,9 +1,9 @@
-"""Flask API for medication tracker CRUD operations."""
+"""Flask API for medication tracker CRUD operations and dose tracking."""
 
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from datetime import datetime, date
-from uuid import uuid4
+from uuid import UUID
 import os
 
 from .database import Database
@@ -22,12 +22,13 @@ def create_app(db_path: str = None, static_folder: str = None):
     Returns:
         Configured Flask application
     """
-    app = Flask(__name__, static_folder=static_folder or 'static')
+    static_dir = static_folder or os.path.join(os.path.dirname(os.path.dirname(__file__)), 'static')
+    app = Flask(__name__, static_folder=static_dir)
     CORS(app)
 
     # Initialize database
     if db_path is None:
-        db_path = "medications.db"
+        db_path = os.environ.get("DB_PATH", "medications.db")
     database = Database(db_path)
     database.init_schema()
     repository = MedicationRepository(database)
@@ -100,7 +101,6 @@ def create_app(db_path: str = None, static_folder: str = None):
             Medication object or 404 if not found
         """
         try:
-            from uuid import UUID
             med_uuid = UUID(medication_id)
         except ValueError:
             return jsonify({"error": "Invalid medication ID format"}), 400
@@ -130,7 +130,6 @@ def create_app(db_path: str = None, static_folder: str = None):
             Updated medication or 404 if not found
         """
         try:
-            from uuid import UUID
             med_uuid = UUID(medication_id)
         except ValueError:
             return jsonify({"error": "Invalid medication ID format"}), 400
@@ -172,7 +171,6 @@ def create_app(db_path: str = None, static_folder: str = None):
             204 No Content on success, 404 if not found
         """
         try:
-            from uuid import UUID
             med_uuid = UUID(medication_id)
         except ValueError:
             return jsonify({"error": "Invalid medication ID format"}), 400
@@ -184,6 +182,7 @@ def create_app(db_path: str = None, static_folder: str = None):
         return '', 204
 
     @app.route('/medications/<medication_id>/doses', methods=['POST'])
+    @app.route('/medications/<medication_id>/dose', methods=['POST'])
     def mark_as_taken(medication_id):
         """Mark a medication dose as taken.
 
@@ -192,12 +191,13 @@ def create_app(db_path: str = None, static_folder: str = None):
 
         Request body (optional):
             date: string (ISO date format, defaults to today)
+            status: string (optional, default 'taken')
 
         Returns:
-            Created dose record
+            Created dose record (201), 409 if already taken today,
+            404 if medication not found, 400 on validation errors.
         """
         try:
-            from uuid import UUID
             med_uuid = UUID(medication_id)
         except ValueError:
             return jsonify({"error": "Invalid medication ID format"}), 400
@@ -215,17 +215,23 @@ def create_app(db_path: str = None, static_folder: str = None):
             except ValueError:
                 return jsonify({"error": "Invalid date format. Use ISO format (YYYY-MM-DD)"}), 400
         else:
-            dose_date = date.today()
+            dose_date = None
 
-        # Check for future date
-        if dose_date > date.today():
-            return jsonify({"error": "Cannot mark dose for a future date"}), 400
-
-        dose_service = DoseService(database)
+        status = data.get('status', 'taken')
 
         try:
-            dose_record = dose_service.mark_dose_taken(med_uuid, dose_date)
+            if status == 'skipped':
+                dose_record = dose_service.mark_dose_skipped(med_uuid, dose_date or date.today())
+            else:
+                dose_record = dose_service.mark_dose_taken(med_uuid, dose_date)
             return jsonify(dose_record.to_dict()), 201
+        except ConflictError as e:
+            return jsonify({"error": str(e)}), 409
+        except ValueError as e:
+            msg = str(e)
+            if "future" in msg.lower():
+                return jsonify({"error": msg}), 400
+            return jsonify({"error": msg}), 400
         except Exception as e:
             error_msg = str(e)
             if "UNIQUE constraint failed" in error_msg or "already recorded" in error_msg.lower():
@@ -233,6 +239,7 @@ def create_app(db_path: str = None, static_folder: str = None):
             return jsonify({"error": error_msg}), 400
 
     @app.route('/medications/<medication_id>/doses', methods=['GET'])
+    @app.route('/medications/<medication_id>/dose', methods=['GET'])
     def get_dose_records(medication_id):
         """Get dose records for a medication.
 
@@ -247,7 +254,6 @@ def create_app(db_path: str = None, static_folder: str = None):
             JSON array of dose records
         """
         try:
-            from uuid import UUID
             med_uuid = UUID(medication_id)
         except ValueError:
             return jsonify({"error": "Invalid medication ID format"}), 400

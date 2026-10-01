@@ -1,6 +1,6 @@
 """Medication CRUD API endpoints."""
 
-from datetime import date, datetime
+from datetime import date
 from typing import List, Optional
 from uuid import UUID
 
@@ -79,7 +79,10 @@ class MedicationUpdate(BaseModel):
     @field_validator("frequency")
     @classmethod
     def validate_frequency(cls, v: Optional[str]) -> Optional[str]:
+<<<<<<< HEAD
         """Validate frequency is not empty or whitespace only."""
+=======
+>>>>>>> 9105369 (runctl: build runctl/build-09d3fc65 (pass))
         if v is not None and (not v or not v.strip()):
             raise ValueError("frequency must be a non-empty string")
         return v.strip() if v else v
@@ -87,7 +90,10 @@ class MedicationUpdate(BaseModel):
     @field_validator("status")
     @classmethod
     def validate_status(cls, v: Optional[str]) -> Optional[str]:
+<<<<<<< HEAD
         """Validate status is either 'active' or 'completed'."""
+=======
+>>>>>>> 9105369 (runctl: build runctl/build-09d3fc65 (pass))
         if v is not None and v not in ("active", "completed"):
             raise ValueError("status must be 'active' or 'completed'")
         return v
@@ -118,6 +124,7 @@ class MedicationAPI:
     """Medication API endpoints."""
 
     def __init__(self, repository):
+<<<<<<< HEAD
         """Initialize API with repository.
 
         Args:
@@ -137,6 +144,12 @@ class MedicationAPI:
         Raises:
             ValueError: If validation fails
         """
+=======
+        self.repository = repository
+
+    def create(self, data: MedicationCreate) -> tuple:
+        """Create a new medication."""
+>>>>>>> 9105369 (runctl: build runctl/build-09d3fc65 (pass))
         from medication_tracker.models import Medication, MedicationStatus
 
         medication = Medication(
@@ -151,6 +164,7 @@ class MedicationAPI:
         created = self.repository.create(medication)
         return MedicationResponse(**created.to_dict()), 201
 
+<<<<<<< HEAD
     def get_all(self, status: Optional[str] = None) -> tuple[List[MedicationResponse], int]:
         """Get all medications, optionally filtered by status.
 
@@ -160,6 +174,10 @@ class MedicationAPI:
         Returns:
             Tuple of (list of MedicationResponse, status_code)
         """
+=======
+    def get_all(self, status: Optional[str] = None) -> tuple:
+        """Get all medications, optionally filtered by status."""
+>>>>>>> 9105369 (runctl: build runctl/build-09d3fc65 (pass))
         from medication_tracker.models import MedicationStatus
 
         if status:
@@ -169,6 +187,7 @@ class MedicationAPI:
 
         return [MedicationResponse(**med.to_dict()) for med in medications], 200
 
+<<<<<<< HEAD
     def get_by_id(self, medication_id: str) -> tuple[MedicationResponse, int]:
         """Get a medication by ID.
 
@@ -181,6 +200,10 @@ class MedicationAPI:
         Raises:
             ValueError: If medication not found
         """
+=======
+    def get_by_id(self, medication_id: str) -> tuple:
+        """Get a medication by ID."""
+>>>>>>> 9105369 (runctl: build runctl/build-09d3fc65 (pass))
         try:
             uuid = UUID(medication_id)
         except ValueError:
@@ -192,6 +215,7 @@ class MedicationAPI:
 
         return MedicationResponse(**medication.to_dict()), 200
 
+<<<<<<< HEAD
     def update(self, medication_id: str, data: MedicationUpdate) -> tuple[MedicationResponse, int]:
         """Update an existing medication.
 
@@ -205,6 +229,10 @@ class MedicationAPI:
         Raises:
             ValueError: If medication not found or validation fails
         """
+=======
+    def update(self, medication_id: str, data: MedicationUpdate) -> tuple:
+        """Update an existing medication."""
+>>>>>>> 9105369 (runctl: build runctl/build-09d3fc65 (pass))
         try:
             uuid = UUID(medication_id)
         except ValueError:
@@ -214,7 +242,10 @@ class MedicationAPI:
         if medication is None:
             raise ValueError(f"Medication with ID {medication_id} not found")
 
+<<<<<<< HEAD
         # Update fields if provided
+=======
+>>>>>>> 9105369 (runctl: build runctl/build-09d3fc65 (pass))
         if data.name is not None:
             medication.name = data.name
         if data.dosage is not None:
@@ -235,6 +266,7 @@ class MedicationAPI:
 
         return MedicationResponse(**updated.to_dict()), 200
 
+<<<<<<< HEAD
     def delete(self, medication_id: str) -> tuple[None, int]:
         """Delete a medication.
 
@@ -247,6 +279,10 @@ class MedicationAPI:
         Raises:
             ValueError: If medication not found
         """
+=======
+    def delete(self, medication_id: str) -> tuple:
+        """Delete a medication."""
+>>>>>>> 9105369 (runctl: build runctl/build-09d3fc65 (pass))
         try:
             uuid = UUID(medication_id)
         except ValueError:
@@ -256,4 +292,8 @@ class MedicationAPI:
         if not deleted:
             raise ValueError(f"Medication with ID {medication_id} not found")
 
+<<<<<<< HEAD
         return None, 204
+=======
+        return None, 204
+>>>>>>> 9105369 (runctl: build runctl/build-09d3fc65 (pass))

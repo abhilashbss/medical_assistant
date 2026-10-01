@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 """Tests for medication tracker functionality.
 
 This module tests:
@@ -15,6 +16,25 @@ from uuid import uuid4
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
+=======
+"""Unit tests for medication tracker: models, repository, dose service, and persistence.
+
+Covers the definition of done for build unit #2 (dose tracking):
+- Medication creation succeeds with valid name, dosage, frequency, and date fields
+- Medication creation fails with 400 status when required fields are missing or empty
+- Dosage and frequency values reject non-string or invalid inputs
+- Mark-as-taken action creates a timestamped dose record linked to correct medication
+- All medication data persists correctly and is retrievable after app restart
+- Dose tracking: duplicate prevention, history retrieval, future date rejection
+"""
+
+import os
+import tempfile
+from datetime import date, timedelta
+from uuid import uuid4, UUID
+
+import pytest
+>>>>>>> 9105369 (runctl: build runctl/build-09d3fc65 (pass))
 
 from medication_tracker import (
     Database,
@@ -24,6 +44,7 @@ from medication_tracker import (
     DoseRecord,
     DoseStatus,
     MedicationRepository,
+<<<<<<< HEAD
 )
 from medication_tracker.dose_service import DoseService, ConflictError
 
@@ -1095,3 +1116,502 @@ class TestFunctionalDoseTracking:
         assert history_response.status_code == 200
         data = history_response.get_json()
         assert len(data) == 1
+=======
+    DoseService,
+    ConflictError,
+)
+from medication_tracker.models import Medication as MedicationModel
+
+
+# ---------------------------------------------------------------------------
+# Medication model validation
+# ---------------------------------------------------------------------------
+
+
+class TestMedicationModelValidation:
+    """Tests for Medication model field validation."""
+
+    def test_valid_medication_creation(self):
+        """Medication creation succeeds with valid name, dosage, frequency, and date fields."""
+        med = Medication(
+            name="Amoxicillin",
+            dosage="500mg",
+            frequency="twice daily",
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 14),
+        )
+        assert med.name == "Amoxicillin"
+        assert med.dosage == "500mg"
+        assert med.frequency == "twice daily"
+        assert med.start_date == date(2026, 1, 1)
+        assert med.end_date == date(2026, 1, 14)
+        assert med.status == MedicationStatus.ACTIVE
+        assert isinstance(med.id, UUID)
+
+    def test_creation_fails_when_name_missing(self):
+        """Medication creation fails when name is missing."""
+        with pytest.raises(TypeError):
+            Medication(dosage="500mg", frequency="twice daily")
+
+    def test_creation_fails_when_dosage_missing(self):
+        """Medication creation fails when dosage is missing."""
+        with pytest.raises(TypeError):
+            Medication(name="Amoxicillin", frequency="twice daily")
+
+    def test_creation_fails_when_frequency_missing(self):
+        """Medication creation fails when frequency is missing."""
+        with pytest.raises(TypeError):
+            Medication(name="Amoxicillin", dosage="500mg")
+
+    def test_creation_fails_with_empty_name(self):
+        """Medication creation fails with empty name."""
+        with pytest.raises(ValueError):
+            Medication(name="", dosage="500mg", frequency="twice daily")
+
+    def test_creation_fails_with_empty_dosage(self):
+        """Medication creation fails with empty dosage."""
+        with pytest.raises(ValueError):
+            Medication(name="Amoxicillin", dosage="", frequency="twice daily")
+
+    def test_creation_fails_with_empty_frequency(self):
+        """Medication creation fails with empty frequency."""
+        with pytest.raises(ValueError):
+            Medication(name="Amoxicillin", dosage="500mg", frequency="")
+
+    def test_creation_fails_with_whitespace_only_name(self):
+        """Medication creation fails with whitespace-only name."""
+        with pytest.raises(ValueError):
+            Medication(name="   ", dosage="500mg", frequency="twice daily")
+
+    def test_creation_fails_with_whitespace_only_dosage(self):
+        """Medication creation fails with whitespace-only dosage."""
+        with pytest.raises(ValueError):
+            Medication(name="Amoxicillin", dosage="  ", frequency="twice daily")
+
+    def test_creation_fails_with_whitespace_only_frequency(self):
+        """Medication creation fails with whitespace-only frequency."""
+        with pytest.raises(ValueError):
+            Medication(name="Amoxicillin", dosage="500mg", frequency="  ")
+
+    def test_dosage_rejects_non_string(self):
+        """Dosage value rejects non-string inputs."""
+        with pytest.raises(ValueError):
+            Medication(name="Amoxicillin", dosage=500, frequency="twice daily")
+
+    def test_frequency_rejects_non_string(self):
+        """Frequency value rejects non-string inputs."""
+        with pytest.raises(ValueError):
+            Medication(name="Amoxicillin", dosage="500mg", frequency=2)
+
+    def test_name_rejects_non_string(self):
+        """Name value rejects non-string inputs."""
+        with pytest.raises(ValueError):
+            Medication(name=123, dosage="500mg", frequency="twice daily")
+
+    def test_invalid_status_rejected(self):
+        """Invalid status value is rejected."""
+        with pytest.raises(ValueError):
+            Medication(name="Amoxicillin", dosage="500mg", frequency="daily", status="paused")
+
+    def test_to_dict_roundtrip(self):
+        """to_dict produces a serializable dictionary."""
+        med = Medication(name="Ibuprofen", dosage="400mg", frequency="every 6 hours")
+        d = med.to_dict()
+        assert d["name"] == "Ibuprofen"
+        assert d["dosage"] == "400mg"
+        assert d["frequency"] == "every 6 hours"
+        assert d["status"] == "active"
+        assert d["id"] == str(med.id)
+
+
+# ---------------------------------------------------------------------------
+# DoseRecord model validation
+# ---------------------------------------------------------------------------
+
+
+class TestDoseRecordValidation:
+    """Tests for DoseRecord model validation."""
+
+    def test_dose_record_defaults(self):
+        """DoseRecord gets an id and timestamp by default."""
+        dose = DoseRecord(medication_id=uuid4(), date=date.today())
+        assert dose.status == "taken"
+        assert isinstance(dose.id, UUID)
+        assert dose.timestamp is not None
+
+    def test_dose_record_future_date_rejected(self):
+        """DoseRecord date cannot be in the future."""
+        future = date.today() + timedelta(days=1)
+        with pytest.raises(ValueError):
+            DoseRecord(medication_id=uuid4(), date=future)
+
+    def test_dose_record_invalid_status_rejected(self):
+        """DoseRecord status must be a valid enum value."""
+        with pytest.raises(ValueError):
+            DoseRecord(medication_id=uuid4(), date=date.today(), status="maybe")
+
+    def test_dose_record_valid_statuses(self):
+        """DoseRecord accepts all valid statuses."""
+        for status in ("taken", "skipped", "missed"):
+            dose = DoseRecord(medication_id=uuid4(), date=date.today(), status=status)
+            assert dose.status == status
+
+    def test_dose_record_to_dict(self):
+        """DoseRecord.to_dict serializes correctly."""
+        med_id = uuid4()
+        dose = DoseRecord(medication_id=med_id, date=date(2026, 1, 1), status="taken")
+        d = dose.to_dict()
+        assert d["medication_id"] == str(med_id)
+        assert d["date"] == "2026-01-01"
+        assert d["status"] == "taken"
+
+
+# ---------------------------------------------------------------------------
+# Repository / persistence
+# ---------------------------------------------------------------------------
+
+
+class TestMedicationRepository:
+    """Tests for medication repository CRUD and persistence."""
+
+    def test_create_and_retrieve(self, repository):
+        """Created medication is retrievable by id."""
+        med = Medication(name="Test", dosage="100mg", frequency="daily")
+        created = repository.create(med)
+        assert created.created_at is not None
+
+        retrieved = repository.get_by_id(med.id)
+        assert retrieved is not None
+        assert retrieved.name == "Test"
+        assert retrieved.dosage == "100mg"
+
+    def test_get_all_sorted_by_created_at_desc(self, repository):
+        """get_all returns medications sorted by created_at descending."""
+        import time
+
+        med1 = Medication(name="First", dosage="10mg", frequency="daily")
+        med2 = Medication(name="Second", dosage="20mg", frequency="daily")
+        repository.create(med1)
+        time.sleep(0.01)
+        repository.create(med2)
+
+        all_meds = repository.get_all()
+        assert all_meds[0].name == "Second"
+        assert all_meds[1].name == "First"
+
+    def test_update(self, repository):
+        """Updating a medication persists changes."""
+        med = Medication(name="Original", dosage="100mg", frequency="daily")
+        repository.create(med)
+        med.name = "Updated"
+        med.dosage = "200mg"
+        updated = repository.update(med)
+        assert updated.name == "Updated"
+        assert updated.dosage == "200mg"
+
+    def test_delete(self, repository):
+        """Deleting a medication removes it."""
+        med = Medication(name="ToDelete", dosage="50mg", frequency="daily")
+        repository.create(med)
+        assert repository.delete(med.id) is True
+        assert repository.get_by_id(med.id) is None
+
+    def test_delete_nonexistent_returns_false(self, repository):
+        """Deleting a non-existent medication returns False."""
+        assert repository.delete(uuid4()) is False
+
+
+class TestDataPersistenceAcrossRestart:
+    """Tests that medication data persists across database reopen (app restart)."""
+
+    def test_medication_persists_after_reopen(self):
+        """Medication data persists correctly and is retrievable after app restart."""
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        try:
+            db1 = get_database(path)
+            db1.init_schema()
+            repo1 = MedicationRepository(db1)
+            med = Medication(name="Persistent", dosage="100mg", frequency="daily")
+            repo1.create(med)
+            original_id = med.id
+            db1.close()
+
+            db2 = get_database(path)
+            db2.init_schema()
+            repo2 = MedicationRepository(db2)
+            retrieved = repo2.get_by_id(original_id)
+            assert retrieved is not None
+            assert retrieved.name == "Persistent"
+            assert retrieved.dosage == "100mg"
+            db2.close()
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
+    def test_dose_records_persist_after_reopen(self):
+        """Dose records persist correctly and are retrievable after app restart."""
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        try:
+            db1 = get_database(path)
+            db1.init_schema()
+            repo1 = MedicationRepository(db1)
+            med = Medication(name="Dose Med", dosage="100mg", frequency="daily")
+            repo1.create(med)
+
+            dose = DoseRecord(medication_id=med.id, date=date.today())
+            repo1.create_dose_record(dose)
+            db1.close()
+
+            db2 = get_database(path)
+            db2.init_schema()
+            repo2 = MedicationRepository(db2)
+            records = repo2.get_dose_records(med.id)
+            assert len(records) == 1
+            assert records[0].medication_id == med.id
+            db2.close()
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
+
+# ---------------------------------------------------------------------------
+# DoseService - core dose tracking logic (build unit #2)
+# ---------------------------------------------------------------------------
+
+
+class TestDoseServiceMarkTaken:
+    """Tests for DoseService.mark_dose_taken."""
+
+    def test_mark_dose_taken_creates_timestamped_record(self, repository, dose_service):
+        """Mark-as-taken creates a timestamped dose record linked to correct medication."""
+        med = Medication(name="Test Med", dosage="100mg", frequency="daily")
+        repository.create(med)
+
+        dose = dose_service.mark_dose_taken(med.id)
+        assert dose.medication_id == med.id
+        assert dose.status == "taken"
+        assert dose.timestamp is not None
+        assert dose.date == date.today()
+
+    def test_mark_dose_taken_for_specific_date(self, repository, dose_service):
+        """Mark-as-taken with a specific past date creates a record for that date."""
+        med = Medication(name="Test Med", dosage="100mg", frequency="daily")
+        repository.create(med)
+
+        specific = date.today() - timedelta(days=2)
+        dose = dose_service.mark_dose_taken(med.id, specific)
+        assert dose.date == specific
+
+    def test_duplicate_same_day_returns_conflict(self, repository, dose_service):
+        """Duplicate call to mark_dose_taken on the same day raises ConflictError."""
+        med = Medication(name="Test Med", dosage="100mg", frequency="daily")
+        repository.create(med)
+
+        dose_service.mark_dose_taken(med.id)
+        with pytest.raises(ConflictError):
+            dose_service.mark_dose_taken(med.id)
+
+    def test_duplicate_specific_date_returns_conflict(self, repository, dose_service):
+        """Duplicate for a specific date raises ConflictError."""
+        med = Medication(name="Test Med", dosage="100mg", frequency="daily")
+        repository.create(med)
+
+        specific = date.today() - timedelta(days=1)
+        dose_service.mark_dose_taken(med.id, specific)
+        with pytest.raises(ConflictError):
+            dose_service.mark_dose_taken(med.id, specific)
+
+    def test_future_date_rejected(self, repository, dose_service):
+        """Future date is rejected with ValueError."""
+        med = Medication(name="Test Med", dosage="100mg", frequency="daily")
+        repository.create(med)
+
+        future = date.today() + timedelta(days=1)
+        with pytest.raises(ValueError):
+            dose_service.mark_dose_taken(med.id, future)
+
+    def test_mark_dose_skipped(self, repository, dose_service):
+        """mark_dose_skipped creates a skipped dose record."""
+        med = Medication(name="Test Med", dosage="100mg", frequency="daily")
+        repository.create(med)
+
+        dose = dose_service.mark_dose_skipped(med.id, date.today())
+        assert dose.status == "skipped"
+
+    def test_mark_dose_skipped_duplicate_conflict(self, repository, dose_service):
+        """Duplicate skipped dose raises ConflictError."""
+        med = Medication(name="Test Med", dosage="100mg", frequency="daily")
+        repository.create(med)
+
+        dose_service.mark_dose_skipped(med.id, date.today())
+        with pytest.raises(ConflictError):
+            dose_service.mark_dose_skipped(med.id, date.today())
+
+
+class TestDoseServiceHistory:
+    """Tests for DoseService.get_dose_history."""
+
+    def test_get_dose_history_returns_sorted_results(self, repository, dose_service):
+        """getDoseHistory returns sorted results (date desc)."""
+        med = Medication(name="Test Med", dosage="100mg", frequency="daily")
+        repository.create(med)
+
+        day1 = date.today() - timedelta(days=2)
+        day2 = date.today() - timedelta(days=1)
+        day3 = date.today()
+
+        dose_service.mark_dose_taken(med.id, day1)
+        dose_service.mark_dose_taken(med.id, day2)
+        dose_service.mark_dose_taken(med.id, day3)
+
+        history = dose_service.get_dose_history(med.id)
+        assert len(history) == 3
+        # Sorted by date descending
+        assert history[0].date == day3
+        assert history[1].date == day2
+        assert history[2].date == day1
+
+    def test_get_dose_history_with_date_range(self, repository, dose_service):
+        """getDoseHistory filters by start and end date."""
+        med = Medication(name="Test Med", dosage="100mg", frequency="daily")
+        repository.create(med)
+
+        day1 = date.today() - timedelta(days=3)
+        day2 = date.today() - timedelta(days=2)
+        day3 = date.today() - timedelta(days=1)
+
+        dose_service.mark_dose_taken(med.id, day1)
+        dose_service.mark_dose_taken(med.id, day2)
+        dose_service.mark_dose_taken(med.id, day3)
+
+        history = dose_service.get_dose_history(med.id, start_date=day2, end_date=day3)
+        assert len(history) == 2
+        assert all(r.date >= day2 for r in history)
+        assert all(r.date <= day3 for r in history)
+
+    def test_get_dose_history_empty_for_new_medication(self, repository, dose_service):
+        """getDoseHistory returns empty list for a medication with no doses."""
+        med = Medication(name="Test Med", dosage="100mg", frequency="daily")
+        repository.create(med)
+
+        history = dose_service.get_dose_history(med.id)
+        assert history == []
+
+    def test_get_dose_for_date(self, repository, dose_service):
+        """get_dose_for_date returns the dose for a specific date or None."""
+        med = Medication(name="Test Med", dosage="100mg", frequency="daily")
+        repository.create(med)
+
+        assert dose_service.get_dose_for_date(med.id, date.today()) is None
+
+        dose_service.mark_dose_taken(med.id)
+        found = dose_service.get_dose_for_date(med.id, date.today())
+        assert found is not None
+        assert found.status == "taken"
+
+    def test_doses_isolated_per_medication(self, repository, dose_service):
+        """Dose records are isolated per medication — same date allowed for different meds."""
+        med1 = Medication(name="Med One", dosage="100mg", frequency="daily")
+        med2 = Medication(name="Med Two", dosage="200mg", frequency="daily")
+        repository.create(med1)
+        repository.create(med2)
+
+        dose_service.mark_dose_taken(med1.id)
+        dose_service.mark_dose_taken(med2.id)  # same day, different med — no conflict
+
+        assert len(dose_service.get_dose_history(med1.id)) == 1
+        assert len(dose_service.get_dose_history(med2.id)) == 1
+
+
+class TestDoseServiceTimezone:
+    """Tests for DATE_TIMEZONE-aware date handling."""
+
+    def test_today_honors_non_utc_timezone(self, repository, dose_service, monkeypatch):
+        """_today() resolves today using DATE_TIMEZONE when set to a non-UTC zone."""
+        from medication_tracker.dose_service import _today
+
+        monkeypatch.setenv("DATE_TIMEZONE", "America/New_York")
+        result = _today()
+        assert isinstance(result, date)
+
+    def test_today_falls_back_on_invalid_timezone(self, monkeypatch):
+        """_today() falls back to UTC for an unrecognized timezone."""
+        from medication_tracker.dose_service import _today
+
+        monkeypatch.setenv("DATE_TIMEZONE", "Not/A_Real_Zone")
+        result = _today()
+        assert isinstance(result, date)
+
+    def test_mark_dose_taken_uses_timezone_today(self, repository, dose_service, monkeypatch):
+        """mark_dose_taken with no date uses the timezone-aware today."""
+        monkeypatch.setenv("DATE_TIMEZONE", "America/New_York")
+        med = Medication(name="TZ Med", dosage="100mg", frequency="daily")
+        repository.create(med)
+
+        dose = dose_service.mark_dose_taken(med.id)
+        from medication_tracker.dose_service import _today
+        assert dose.date == _today()
+
+
+# ---------------------------------------------------------------------------
+# Database schema / indexes
+# ---------------------------------------------------------------------------
+
+
+class TestDatabaseSchema:
+    """Tests for database schema integrity."""
+
+    def test_dose_records_unique_constraint(self, database):
+        """Unique constraint on (medication_id, date) prevents duplicates at DB level."""
+        from sqlite3 import IntegrityError
+
+        med_id = str(uuid4())
+        with database.transaction() as conn:
+            conn.execute(
+                "INSERT INTO medications (id, name, dosage, frequency) VALUES (?, ?, ?, ?)",
+                (med_id, "Test", "100mg", "daily"),
+            )
+
+        today = date.today().isoformat()
+        with database.transaction() as conn:
+            conn.execute(
+                "INSERT INTO dose_records (id, medication_id, date, timestamp, status) VALUES (?, ?, ?, ?, ?)",
+                (str(uuid4()), med_id, today, "2026-01-01T00:00:00", "taken"),
+            )
+
+        with pytest.raises(IntegrityError):
+            with database.transaction() as conn:
+                conn.execute(
+                    "INSERT INTO dose_records (id, medication_id, date, timestamp, status) VALUES (?, ?, ?, ?, ?)",
+                    (str(uuid4()), med_id, today, "2026-01-01T00:00:00", "taken"),
+                )
+
+    def test_dose_records_indexes_exist(self, database):
+        """Indexes on medication_id and date exist for query performance."""
+        cursor = database.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='dose_records'"
+        )
+        index_names = {row["name"] for row in cursor.fetchall()}
+        assert "idx_dose_records_medication_id" in index_names
+        assert "idx_dose_records_date" in index_names
+
+    def test_dose_status_check_constraint(self, database):
+        """Invalid dose status is rejected at DB level."""
+        from sqlite3 import IntegrityError
+
+        med_id = str(uuid4())
+        with database.transaction() as conn:
+            conn.execute(
+                "INSERT INTO medications (id, name, dosage, frequency) VALUES (?, ?, ?, ?)",
+                (med_id, "Test", "100mg", "daily"),
+            )
+
+        with pytest.raises(IntegrityError):
+            with database.transaction() as conn:
+                conn.execute(
+                    "INSERT INTO dose_records (id, medication_id, date, timestamp, status) VALUES (?, ?, ?, ?, ?)",
+                    (str(uuid4()), med_id, date.today().isoformat(), "2026-01-01T00:00:00", "maybe"),
+                )
+>>>>>>> 9105369 (runctl: build runctl/build-09d3fc65 (pass))

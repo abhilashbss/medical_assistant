@@ -1,0 +1,94 @@
+========================================================================
+MEDICINE TRACKER — DOSE TRACKING MILESTONE TRANSCRIPT
+Generated: 2026-10-01 (pytest functional gate)
+========================================================================
+
+This transcript records real HTTP requests against the Flask test
+client proving: mark-as-taken, idempotency (409), dose history with
+date-range filtering, future-date rejection (400), and per-medication
+dose isolation.
+
+STEP 1 — POST /medications (create medication)
+  Request: POST /medications
+    Body: {'name': 'Metformin', 'dosage': '500mg', 'frequency': 'twice daily',
+           'start_date': '2026-09-29', 'end_date': '2026-10-01'}
+  Response: 201 Created
+    {'id': 'd9e5acee-06c1-4720-a6d1-62323e7b26f5', 'name': 'Metformin', 'dosage': '500mg',
+     'frequency': 'twice daily', 'status': 'active'}
+
+STEP 2 — POST /medications/<id>/doses (mark taken, past date)
+  Request: POST /medications/d9e5acee-06c1-4720-a6d1-62323e7b26f5/doses
+    Body: {'date': '2026-09-29'}
+  Response: 201 Created
+    {'id': 'e8564ac4-7307-41b0-b6cd-9a7dd1fbe9a2', 'medication_id': 'd9e5acee-06c1-4720-a6d1-62323e7b26f5',
+     'date': '2026-09-29', 'timestamp': '2026-10-01T01:51:28.743728',
+     'status': 'taken'}
+
+STEP 3 — POST /medications/<id>/doses (mark taken, yesterday)
+  Request: POST /medications/d9e5acee-06c1-4720-a6d1-62323e7b26f5/doses
+    Body: {'date': '2026-09-30'}
+  Response: 201 Created
+    {'id': '97d62c5d-5796-4997-9a10-23ea0cad6780', 'medication_id': 'd9e5acee-06c1-4720-a6d1-62323e7b26f5',
+     'date': '2026-09-30', 'timestamp': '2026-10-01T01:51:28.746499',
+     'status': 'taken'}
+
+STEP 4 — POST /medications/<id>/doses (mark taken, today, no date)
+  Request: POST /medications/d9e5acee-06c1-4720-a6d1-62323e7b26f5/doses
+    Body: {}  (date defaults to today)
+  Response: 201 Created
+    {'id': '60f88edc-4996-4874-93aa-5514b294526a', 'medication_id': 'd9e5acee-06c1-4720-a6d1-62323e7b26f5',
+     'date': '2026-10-01', 'timestamp': '2026-10-01T01:51:28.748182',
+     'status': 'taken'}
+
+STEP 5 — POST /medications/<id>/doses (duplicate, expect 409)
+  Request: POST /medications/d9e5acee-06c1-4720-a6d1-62323e7b26f5/doses
+    Body: {}  (already taken today)
+  Response: 409 Conflict
+    {'error': 'Dose already recorded for medication d9e5acee-06c1-4720-a6d1-62323e7b26f5 on 2026-10-01'}
+  => Idempotency enforced: second mark-as-taken for the same date
+     is rejected with 409, proving the unique (medication_id, date)
+     constraint works.
+
+STEP 6 — POST /medications/<id>/doses (future date, expect 400)
+  Request: POST /medications/d9e5acee-06c1-4720-a6d1-62323e7b26f5/doses
+    Body: {'date': '2026-10-02'}  (future date)
+  Response: 400 Bad Request
+    {'error': 'Cannot mark dose for a future date'}
+  => Future dates are rejected, proving dose validation.
+
+STEP 7 — GET /medications/<id>/doses (full history)
+  Request: GET /medications/d9e5acee-06c1-4720-a6d1-62323e7b26f5/doses
+  Response: 200 OK
+    [
+      {'id': '60f88edc-4996-4874-93aa-5514b294526a', 'date': '2026-10-01',
+       'timestamp': '2026-10-01T01:51:28.748182', 'status': 'taken'}
+      {'id': '97d62c5d-5796-4997-9a10-23ea0cad6780', 'date': '2026-09-30',
+       'timestamp': '2026-10-01T01:51:28.746499', 'status': 'taken'}
+      {'id': 'e8564ac4-7307-41b0-b6cd-9a7dd1fbe9a2', 'date': '2026-09-29',
+       'timestamp': '2026-10-01T01:51:28.743728', 'status': 'taken'}
+    ]
+  => 3 doses returned, sorted by date descending.
+
+STEP 8 — GET /medications/<id>/doses?start=&end= (date range filter)
+  Request: GET /medications/d9e5acee-06c1-4720-a6d1-62323e7b26f5/doses?start=2026-09-30&end=2026-10-01
+  Response: 200 OK
+    [
+      {'id': '60f88edc-4996-4874-93aa-5514b294526a', 'date': '2026-10-01',
+       'timestamp': '2026-10-01T01:51:28.748182', 'status': 'taken'}
+      {'id': '97d62c5d-5796-4997-9a10-23ea0cad6780', 'date': '2026-09-30',
+       'timestamp': '2026-10-01T01:51:28.746499', 'status': 'taken'}
+    ]
+  => 2 doses in range [yesterday, today]; the two_days_ago dose is excluded.
+
+STEP 9 — Per-medication dose isolation (second medication, same day)
+  Created medication 2: 690a9f61-0e70-4ea2-a729-4a928e5d1dc5 (Atorvastatin 20mg)
+  POST /medications/690a9f61-0e70-4ea2-a729-4a928e5d1dc5/doses -> 201 Created
+    {'date': '2026-10-01', 'status': 'taken'}
+  => Same-day dose allowed for a DIFFERENT medication — the unique
+     constraint is scoped to (medication_id, date), not date alone.
+
+========================================================================
+MILESTONE VERIFIED: dose tracking creates timestamped records,
+enforces idempotency (409), supports date-range history queries,
+rejects future dates (400), and isolates doses per medication.
+========================================================================

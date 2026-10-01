@@ -1,7 +1,7 @@
 """Pytest configuration and fixtures for medication tracker tests."""
 
-import pytest
 import os
+import pytest
 from pathlib import Path
 
 
@@ -38,3 +38,11 @@ def repository(database):
     from medication_tracker import MedicationRepository
 
     return MedicationRepository(database)
+
+
+@pytest.fixture
+def dose_service(database):
+    """Create a dose service for testing."""
+    from medication_tracker import DoseService
+
+    return DoseService(database)
