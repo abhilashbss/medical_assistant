@@ -1,0 +1,380 @@
+=== MEDICATION TRACKER — MILESTONE EVIDENCE CONSOLE TRANSCRIPT ===
+Date: 2026-10-01
+Gate command: pytest tests/functional/test_medicine_tracker.py -v --cov
+Evidence type: readable console transcript of real HTTP request/response pairs
+Captured from: Flask test client exercising the medication list UI backend contract
+
+Below is every HTTP exchange the functional gate performed against the app:
+
+
+=== tests/functional/test_medicine_tracker.py::TestFunctionalMedicationAPI::test_add_medication_with_all_required_fields ===
+
+POST /medications
+  -> HTTP 201
+  request body: {"name": "Amoxicillin", "dosage": "500mg", "frequency": "twice daily"}
+  response body: {"created_at": "2026-10-01T02:00:54.690145", "dosage": "500mg", "end_date": null, "frequency": "twice daily", "id": "fefeacc1-c87c-418e-8b52-58f4e691e48e", "name": "Amoxicillin", "start_date": null, "status": "active", "updated_at": "2026-10-01T02:00:54.690145"}
+
+GET /medications
+  -> HTTP 200
+  response body: [{"created_at": "2026-10-01T02:00:54.690145", "dosage": "500mg", "end_date": null, "frequency": "twice daily", "id": "fefeacc1-c87c-418e-8b52-58f4e691e48e", "name": "Amoxicillin", "start_date": null, "status": "active", "updated_at": "2026-10-01T02:00:54.690145"}]
+
+--- end tests/functional/test_medicine_tracker.py::TestFunctionalMedicationAPI::test_add_medication_with_all_required_fields ---
+
+
+=== tests/functional/test_medicine_tracker.py::TestFunctionalMedicationAPI::test_add_medication_missing_name_rejected ===
+
+POST /medications
+  -> HTTP 400
+  request body: {"dosage": "500mg", "frequency": "twice daily"}
+  response body: {"error": "'name'"}
+
+--- end tests/functional/test_medicine_tracker.py::TestFunctionalMedicationAPI::test_add_medication_missing_name_rejected ---
+
+
+=== tests/functional/test_medicine_tracker.py::TestFunctionalMedicationAPI::test_add_medication_missing_dosage_rejected ===
+
+POST /medications
+  -> HTTP 400
+  request body: {"name": "Amoxicillin", "frequency": "twice daily"}
+  response body: {"error": "'dosage'"}
+
+--- end tests/functional/test_medicine_tracker.py::TestFunctionalMedicationAPI::test_add_medication_missing_dosage_rejected ---
+
+
+=== tests/functional/test_medicine_tracker.py::TestFunctionalMedicationAPI::test_add_medication_empty_name_rejected ===
+
+POST /medications
+  -> HTTP 400
+  request body: {"name": "", "dosage": "500mg", "frequency": "twice daily"}
+  response body: {"error": "name must be a non-empty string"}
+
+--- end tests/functional/test_medicine_tracker.py::TestFunctionalMedicationAPI::test_add_medication_empty_name_rejected ---
+
+
+=== tests/functional/test_medicine_tracker.py::TestFunctionalMedicationAPI::test_add_medication_empty_dosage_rejected ===
+
+POST /medications
+  -> HTTP 400
+  request body: {"name": "Amoxicillin", "dosage": "", "frequency": "twice daily"}
+  response body: {"error": "dosage must be a non-empty string"}
+
+--- end tests/functional/test_medicine_tracker.py::TestFunctionalMedicationAPI::test_add_medication_empty_dosage_rejected ---
+
+
+=== tests/functional/test_medicine_tracker.py::TestFunctionalMedicationAPI::test_add_medication_empty_frequency_rejected ===
+
+POST /medications
+  -> HTTP 400
+  request body: {"name": "Amoxicillin", "dosage": "500mg", "frequency": ""}
+  response body: {"error": "frequency must be a non-empty string"}
+
+--- end tests/functional/test_medicine_tracker.py::TestFunctionalMedicationAPI::test_add_medication_empty_frequency_rejected ---
+
+
+=== tests/functional/test_medicine_tracker.py::TestFunctionalMedicationAPI::test_add_medication_with_optional_fields ===
+
+POST /medications
+  -> HTTP 201
+  request body: {"name": "Ibuprofen", "dosage": "400mg", "frequency": "every 6 hours", "start_date": "2026-01-01", "end_date": "2026-01-14", "status": "completed"}
+  response body: {"created_at": "2026-10-01T02:00:54.737002", "dosage": "400mg", "end_date": "2026-01-14", "frequency": "every 6 hours", "id": "ccf1c54f-0a48-4fda-8573-00ec43189d92", "name": "Ibuprofen", "start_date": "2026-01-01", "status": "completed", "updated_at": "2026-10-01T02:00:54.737002"}
+
+--- end tests/functional/test_medicine_tracker.py::TestFunctionalMedicationAPI::test_add_medication_with_optional_fields ---
+
+
+=== tests/functional/test_medicine_tracker.py::TestFunctionalMedicationAPI::test_edit_medication_updates_fields ===
+
+PUT /medications/cb23c044-ae62-440f-bdd4-c3ae3a48e6a6
+  -> HTTP 200
+  request body: {"name": "Edited", "dosage": "200mg", "frequency": "twice daily", "status": "completed"}
+  response body: {"created_at": "2026-10-01T02:00:54.745916", "dosage": "200mg", "end_date": null, "frequency": "twice daily", "id": "cb23c044-ae62-440f-bdd4-c3ae3a48e6a6", "name": "Edited", "start_date": null, "status": "completed", "updated_at": "2026-10-01T02:00:54.746858"}
+
+--- end tests/functional/test_medicine_tracker.py::TestFunctionalMedicationAPI::test_edit_medication_updates_fields ---
+
+
+=== tests/functional/test_medicine_tracker.py::TestFunctionalMedicationAPI::test_edit_nonexistent_medication_returns_404 ===
+
+PUT /medications/d1abf275-7066-4667-a50a-2ac55a8d93c8
+  -> HTTP 404
+  request body: {"name": "Edited"}
+  response body: {"error": "Medication not found"}
+
+--- end tests/functional/test_medicine_tracker.py::TestFunctionalMedicationAPI::test_edit_nonexistent_medication_returns_404 ---
+
+
+=== tests/functional/test_medicine_tracker.py::TestFunctionalMedicationAPI::test_delete_medication_removes_from_list ===
+
+DELETE /medications/4238f489-8943-4ef3-9b90-f76de2e99f44
+  -> HTTP 204
+
+GET /medications
+  -> HTTP 200
+  response body: []
+
+--- end tests/functional/test_medicine_tracker.py::TestFunctionalMedicationAPI::test_delete_medication_removes_from_list ---
+
+
+=== tests/functional/test_medicine_tracker.py::TestFunctionalMedicationAPI::test_delete_nonexistent_medication_returns_404 ===
+
+DELETE /medications/54ab37cf-b386-4d8a-a7fc-1f93a53861ce
+  -> HTTP 404
+  response body: {"error": "Medication not found"}
+
+--- end tests/functional/test_medicine_tracker.py::TestFunctionalMedicationAPI::test_delete_nonexistent_medication_returns_404 ---
+
+
+=== tests/functional/test_medicine_tracker.py::TestFunctionalMedicationAPI::test_mark_as_taken_creates_dose_record ===
+
+POST /medications/7f7c2ef8-2836-4920-95f6-3bb4ec1e99d0/doses
+  -> HTTP 201
+  request body: {}
+  response body: {"date": "2026-10-01", "id": "cb59c607-2cb4-4701-9ff8-f7223ae24454", "medication_id": "7f7c2ef8-2836-4920-95f6-3bb4ec1e99d0", "status": "taken", "timestamp": "2026-10-01T02:00:54.779536"}
+
+--- end tests/functional/test_medicine_tracker.py::TestFunctionalMedicationAPI::test_mark_as_taken_creates_dose_record ---
+
+
+=== tests/functional/test_medicine_tracker.py::TestFunctionalMedicationAPI::test_mark_as_taken_with_specific_date ===
+
+POST /medications/04a62018-64a4-4199-a8ce-affd6c74198f/doses
+  -> HTTP 201
+  request body: {"date": "2026-09-20"}
+  response body: {"date": "2026-09-20", "id": "66c33d89-b5b6-4ecd-990a-c56ed5ec0f68", "medication_id": "04a62018-64a4-4199-a8ce-affd6c74198f", "status": "taken", "timestamp": "2026-10-01T02:00:54.788413"}
+
+--- end tests/functional/test_medicine_tracker.py::TestFunctionalMedicationAPI::test_mark_as_taken_with_specific_date ---
+
+
+=== tests/functional/test_medicine_tracker.py::TestFunctionalMedicationAPI::test_status_filtering_active_medications ===
+
+GET /medications?status=active
+  -> HTTP 200
+  response body: [{"created_at": "2026-10-01T02:00:54.796921", "dosage": "200mg", "end_date": null, "frequency": "daily", "id": "28e17cec-8140-4dfa-847b-e448022e1f2e", "name": "Active 2", "start_date": null, "status": "active", "updated_at": "2026-10-01T02:00:54.796921"}, {"created_at": "2026-10-01T02:00:54.796461", "dosage": "100mg", "end_date": null, "frequency": "daily", "id": "a6f63e93-b2ae-4431-a3bc-197e538086b5", "name": "Active 1", "start_date": null, "status": "active", "updated_at": "2026-10-01T02:00:54.796461"}]
+
+--- end tests/functional/test_medicine_tracker.py::TestFunctionalMedicationAPI::test_status_filtering_active_medications ---
+
+
+=== tests/functional/test_medicine_tracker.py::TestFunctionalMedicationAPI::test_status_filtering_completed_medications ===
+
+GET /medications?status=completed
+  -> HTTP 200
+  response body: [{"created_at": "2026-10-01T02:00:54.806182", "dosage": "300mg", "end_date": null, "frequency": "daily", "id": "07fe1782-2c1d-4a7c-ae9d-e81b428b78af", "name": "Completed 2", "start_date": null, "status": "completed", "updated_at": "2026-10-01T02:00:54.806182"}, {"created_at": "2026-10-01T02:00:54.805758", "dosage": "200mg", "end_date": null, "frequency": "daily", "id": "1c829b9c-9573-4dc1-aa21-bc11350f1b50", "name": "Completed 1", "start_date": null, "status": "completed", "updated_at": "2026-10-01T02:00:54.805758"}]
+
+--- end tests/functional/test_medicine_tracker.py::TestFunctionalMedicationAPI::test_status_filtering_completed_medications ---
+
+
+=== tests/functional/test_medicine_tracker.py::TestFunctionalMedicationAPI::test_status_filter_all_returns_everything ===
+
+GET /medications?status=all
+  -> HTTP 200
+  response body: [{"created_at": "2026-10-01T02:00:54.814304", "dosage": "200mg", "end_date": null, "frequency": "daily", "id": "9009ef59-9c41-4989-80a6-543c0e77950a", "name": "Completed", "start_date": null, "status": "completed", "updated_at": "2026-10-01T02:00:54.814304"}, {"created_at": "2026-10-01T02:00:54.813839", "dosage": "100mg", "end_date": null, "frequency": "daily", "id": "a2eebc6f-57e5-488c-8d6d-adad61237e73", "name": "Active", "start_date": null, "status": "active", "updated_at": "2026-10-01T02:00:54.813839"}]
+
+--- end tests/functional/test_medicine_tracker.py::TestFunctionalMedicationAPI::test_status_filter_all_returns_everything ---
+
+
+=== tests/functional/test_medicine_tracker.py::TestFunctionalMedicationAPI::test_medication_list_sorted_by_most_recent ===
+
+GET /medications
+  -> HTTP 200
+  response body: [{"created_at": "2026-10-01T02:00:54.848268", "dosage": "300mg", "end_date": null, "frequency": "daily", "id": "633c619d-bce5-403d-8852-bfcfa0976bd0", "name": "Third", "start_date": null, "status": "active", "updated_at": "2026-10-01T02:00:54.848268"}, {"created_at": "2026-10-01T02:00:54.835356", "dosage": "200mg", "end_date": null, "frequency": "daily", "id": "e9fdcdbc-6cee-438e-bc9d-d6dee22d0d4d", "name": "Second", "start_date": null, "status": "active", "updated_at": "2026-10-01T02:00:54.835356"}, {"created_at": "2026-10-01T02:00:54.822433", "dosage": "100mg", "end_date": null, "frequency": "daily", "id": "f907f33a-4fbd-4049-ae4e-d00aa7298896", "name": "First", "start_date": null, "status": "active", "updated_at": "2026-10-01T02:00:54.822433"}]
+
+--- end tests/functional/test_medicine_tracker.py::TestFunctionalMedicationAPI::test_medication_list_sorted_by_most_recent ---
+
+
+=== tests/functional/test_medicine_tracker.py::TestFunctionalMedicationAPI::test_get_single_medication_by_id ===
+
+GET /medications/8e917ea7-9a7e-435e-a827-20c06b20ed34
+  -> HTTP 200
+  response body: {"created_at": "2026-10-01T02:00:54.856556", "dosage": "100mg", "end_date": null, "frequency": "daily", "id": "8e917ea7-9a7e-435e-a827-20c06b20ed34", "name": "Test Med", "start_date": null, "status": "active", "updated_at": "2026-10-01T02:00:54.856556"}
+
+--- end tests/functional/test_medicine_tracker.py::TestFunctionalMedicationAPI::test_get_single_medication_by_id ---
+
+
+=== tests/functional/test_medicine_tracker.py::TestFunctionalMedicationAPI::test_get_nonexistent_medication_returns_404 ===
+
+GET /medications/daac2cd3-bdde-4036-8e00-a28405f7a8df
+  -> HTTP 404
+  response body: {"error": "Medication not found"}
+
+--- end tests/functional/test_medicine_tracker.py::TestFunctionalMedicationAPI::test_get_nonexistent_medication_returns_404 ---
+
+
+=== tests/functional/test_medicine_tracker.py::TestDataPersistence::test_data_persists_after_database_reopen ===
+
+--- end tests/functional/test_medicine_tracker.py::TestDataPersistence::test_data_persists_after_database_reopen ---
+
+
+=== tests/functional/test_medicine_tracker.py::TestDataPersistence::test_crud_operations_persist_across_restarts ===
+
+--- end tests/functional/test_medicine_tracker.py::TestDataPersistence::test_crud_operations_persist_across_restarts ---
+
+
+=== tests/functional/test_medicine_tracker.py::TestDataPersistence::test_deleted_medication_stays_deleted ===
+
+--- end tests/functional/test_medicine_tracker.py::TestDataPersistence::test_deleted_medication_stays_deleted ---
+
+
+=== tests/functional/test_medicine_tracker.py::TestDataPersistence::test_dose_records_persist ===
+
+--- end tests/functional/test_medicine_tracker.py::TestDataPersistence::test_dose_records_persist ---
+
+
+=== tests/functional/test_medicine_tracker.py::TestFunctionalMedicationList::test_empty_list_response ===
+
+GET /medications
+  -> HTTP 200
+  response body: []
+
+--- end tests/functional/test_medicine_tracker.py::TestFunctionalMedicationList::test_empty_list_response ---
+
+
+=== tests/functional/test_medicine_tracker.py::TestFunctionalMedicationList::test_list_includes_all_medication_fields ===
+
+GET /medications
+  -> HTTP 200
+  response body: [{"created_at": "2026-10-01T02:00:54.895618", "dosage": "100mg", "end_date": "2026-01-14", "frequency": "daily", "id": "69d7e2ae-7516-4d6d-a4d6-6fe624335e5c", "name": "Test Med", "start_date": "2026-01-01", "status": "active", "updated_at": "2026-10-01T02:00:54.895618"}]
+
+--- end tests/functional/test_medicine_tracker.py::TestFunctionalMedicationList::test_list_includes_all_medication_fields ---
+
+
+=== tests/functional/test_medicine_tracker.py::TestFunctionalMedicationList::test_health_endpoint ===
+
+GET /health
+  -> HTTP 200
+  response body: {"status": "healthy"}
+
+--- end tests/functional/test_medicine_tracker.py::TestFunctionalMedicationList::test_health_endpoint ---
+
+
+=== tests/functional/test_medicine_tracker.py::TestMedicationListUIIntegration::test_index_page_serves_component_html ===
+
+GET /
+  -> HTTP 200
+
+--- end tests/functional/test_medicine_tracker.py::TestMedicationListUIIntegration::test_index_page_serves_component_html ---
+
+
+=== tests/functional/test_medicine_tracker.py::TestMedicationListUIIntegration::test_static_component_assets_are_served ===
+
+GET /js/api.js
+  -> HTTP 200
+
+GET /js/toast.js
+  -> HTTP 200
+
+GET /js/medication-form.js
+  -> HTTP 200
+
+GET /js/delete-dialog.js
+  -> HTTP 200
+
+GET /js/medication-list.js
+  -> HTTP 200
+
+GET /js/app.js
+  -> HTTP 200
+
+GET /css/styles.css
+  -> HTTP 200
+
+--- end tests/functional/test_medicine_tracker.py::TestMedicationListUIIntegration::test_static_component_assets_are_served ---
+
+
+=== tests/functional/test_medicine_tracker.py::TestMedicationListUIIntegration::test_filter_requery_returns_only_matching_status ===
+
+GET /medications?status=all
+  -> HTTP 200
+  response body: [{"created_at": "2026-10-01T02:00:54.930874", "dosage": "200mg", "end_date": null, "frequency": "daily", "id": "718b4df2-a787-41a7-b0cd-66de42b5cd4d", "name": "Completed Med", "start_date": null, "status": "completed", "updated_at": "2026-10-01T02:00:54.930874"}, {"created_at": "2026-10-01T02:00:54.930437", "dosage": "100mg", "end_date": null, "frequency": "daily", "id": "7f51b2ab-a0b3-4213-a4f8-14f3bd3374e9", "name": "Active Med", "start_date": null, "status": "active", "updated_at": "2026-10-01T02:00:54.930437"}]
+
+GET /medications?status=active
+  -> HTTP 200
+  response body: [{"created_at": "2026-10-01T02:00:54.930437", "dosage": "100mg", "end_date": null, "frequency": "daily", "id": "7f51b2ab-a0b3-4213-a4f8-14f3bd3374e9", "name": "Active Med", "start_date": null, "status": "active", "updated_at": "2026-10-01T02:00:54.930437"}]
+
+GET /medications?status=completed
+  -> HTTP 200
+  response body: [{"created_at": "2026-10-01T02:00:54.930874", "dosage": "200mg", "end_date": null, "frequency": "daily", "id": "718b4df2-a787-41a7-b0cd-66de42b5cd4d", "name": "Completed Med", "start_date": null, "status": "completed", "updated_at": "2026-10-01T02:00:54.930874"}]
+
+--- end tests/functional/test_medicine_tracker.py::TestMedicationListUIIntegration::test_filter_requery_returns_only_matching_status ---
+
+
+=== tests/functional/test_medicine_tracker.py::TestMedicationListUIIntegration::test_edit_form_prepopulation_via_get_by_id ===
+
+GET /medications/008ce865-5453-4f55-b72a-c1a204a46a96
+  -> HTTP 200
+  response body: {"created_at": "2026-10-01T02:00:54.939536", "dosage": "100mg", "end_date": "2026-01-14", "frequency": "daily", "id": "008ce865-5453-4f55-b72a-c1a204a46a96", "name": "Original", "start_date": "2026-01-01", "status": "active", "updated_at": "2026-10-01T02:00:54.939536"}
+
+--- end tests/functional/test_medicine_tracker.py::TestMedicationListUIIntegration::test_edit_form_prepopulation_via_get_by_id ---
+
+
+=== tests/functional/test_medicine_tracker.py::TestMedicationListUIIntegration::test_edit_save_persists_via_put ===
+
+PUT /medications/44b98d71-f8d3-4ade-aee2-07969fd4b73b
+  -> HTTP 200
+  request body: {"name": "Edited Name", "dosage": "250mg", "frequency": "three times daily", "status": "completed"}
+  response body: {"created_at": "2026-10-01T02:00:54.947277", "dosage": "250mg", "end_date": null, "frequency": "three times daily", "id": "44b98d71-f8d3-4ade-aee2-07969fd4b73b", "name": "Edited Name", "start_date": null, "status": "completed", "updated_at": "2026-10-01T02:00:54.948105"}
+
+--- end tests/functional/test_medicine_tracker.py::TestMedicationListUIIntegration::test_edit_save_persists_via_put ---
+
+
+=== tests/functional/test_medicine_tracker.py::TestMedicationListUIIntegration::test_delete_confirmation_flow_removes_medication ===
+
+DELETE /medications/ee527b9b-5109-438d-b50a-c7e288bae2e4
+  -> HTTP 204
+
+GET /medications
+  -> HTTP 200
+  response body: []
+
+GET /medications/ee527b9b-5109-438d-b50a-c7e288bae2e4
+  -> HTTP 404
+  response body: {"error": "Medication not found"}
+
+--- end tests/functional/test_medicine_tracker.py::TestMedicationListUIIntegration::test_delete_confirmation_flow_removes_medication ---
+
+
+=== tests/functional/test_medicine_tracker.py::TestMedicationListUIIntegration::test_full_list_filter_edit_delete_cycle ===
+
+GET /medications
+  -> HTTP 200
+  response body: [{"created_at": "2026-10-01T02:00:54.975564", "dosage": "200mg", "end_date": null, "frequency": "daily", "id": "ff0adcc7-25f5-4066-adf9-ea72b1b16862", "name": "Med Two", "start_date": null, "status": "completed", "updated_at": "2026-10-01T02:00:54.975564"}, {"created_at": "2026-10-01T02:00:54.975100", "dosage": "100mg", "end_date": null, "frequency": "daily", "id": "01c5844e-5ea5-4d80-9a85-756e31988dde", "name": "Med One", "start_date": null, "status": "active", "updated_at": "2026-10-01T02:00:54.975100"}]
+
+GET /medications?status=active
+  -> HTTP 200
+  response body: [{"created_at": "2026-10-01T02:00:54.975100", "dosage": "100mg", "end_date": null, "frequency": "daily", "id": "01c5844e-5ea5-4d80-9a85-756e31988dde", "name": "Med One", "start_date": null, "status": "active", "updated_at": "2026-10-01T02:00:54.975100"}]
+
+PUT /medications/01c5844e-5ea5-4d80-9a85-756e31988dde
+  -> HTTP 200
+  request body: {"status": "completed"}
+  response body: {"created_at": "2026-10-01T02:00:54.975100", "dosage": "100mg", "end_date": null, "frequency": "daily", "id": "01c5844e-5ea5-4d80-9a85-756e31988dde", "name": "Med One", "start_date": null, "status": "completed", "updated_at": "2026-10-01T02:00:54.977051"}
+
+GET /medications?status=active
+  -> HTTP 200
+  response body: []
+
+GET /medications?status=completed
+  -> HTTP 200
+  response body: [{"created_at": "2026-10-01T02:00:54.975564", "dosage": "200mg", "end_date": null, "frequency": "daily", "id": "ff0adcc7-25f5-4066-adf9-ea72b1b16862", "name": "Med Two", "start_date": null, "status": "completed", "updated_at": "2026-10-01T02:00:54.975564"}, {"created_at": "2026-10-01T02:00:54.975100", "dosage": "100mg", "end_date": null, "frequency": "daily", "id": "01c5844e-5ea5-4d80-9a85-756e31988dde", "name": "Med One", "start_date": null, "status": "completed", "updated_at": "2026-10-01T02:00:54.977051"}]
+
+DELETE /medications/ff0adcc7-25f5-4066-adf9-ea72b1b16862
+  -> HTTP 204
+
+GET /medications
+  -> HTTP 200
+  response body: [{"created_at": "2026-10-01T02:00:54.975100", "dosage": "100mg", "end_date": null, "frequency": "daily", "id": "01c5844e-5ea5-4d80-9a85-756e31988dde", "name": "Med One", "start_date": null, "status": "completed", "updated_at": "2026-10-01T02:00:54.977051"}]
+
+--- end tests/functional/test_medicine_tracker.py::TestMedicationListUIIntegration::test_full_list_filter_edit_delete_cycle ---
+
+
+=== tests/functional/test_medicine_tracker.py::TestMedicationListUIIntegration::test_invalid_filter_value_returns_400 ===
+
+GET /medications?status=invalid
+  -> HTTP 400
+  response body: {"error": "Invalid status value. Must be 'active', 'completed', or 'all'"}
+
+--- end tests/functional/test_medicine_tracker.py::TestMedicationListUIIntegration::test_invalid_filter_value_returns_400 ---
+
+
+=== tests/functional/test_medicine_tracker.py::TestMedicationListUIIntegration::test_empty_state_api_contract ===
+
+GET /medications?status=active
+  -> HTTP 200
+  response body: []
+
+--- end tests/functional/test_medicine_tracker.py::TestMedicationListUIIntegration::test_empty_state_api_contract ---

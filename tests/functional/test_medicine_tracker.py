@@ -6,8 +6,18 @@ This module tests:
 - Mark-as-taken action creates timestamped dose records
 - Status filtering (active vs completed)
 - Data persistence across app restarts
+<<<<<<< HEAD
 """
 
+=======
+
+A console transcript of real HTTP request/response pairs is captured into
+.see/e2e-artifacts/console-transcript.txt to provide milestone-level evidence
+that the medication list UI's backend contract works end-to-end.
+"""
+
+import json
+>>>>>>> 47172f7 (runctl: build runctl/build-5c677d80 (pass))
 import pytest
 import tempfile
 import os
@@ -29,6 +39,64 @@ from medication_tracker import (
 )
 
 
+<<<<<<< HEAD
+=======
+# --- Transcript capture infrastructure ---------------------------------------
+
+EVIDENCE_DIR = Path(__file__).parent.parent.parent / '.see' / 'e2e-artifacts'
+_TRANSCRIPT_LINES: list = []
+
+
+def _record_exchange(method, path, status_code, body=None, response_body=None):
+    """Record a single HTTP request/response pair into the transcript."""
+    line = f"\n{method} {path}\n  -> HTTP {status_code}"
+    if body is not None:
+        line += f"\n  request body: {json.dumps(body)}"
+    if response_body is not None:
+        if isinstance(response_body, (dict, list)):
+            line += f"\n  response body: {json.dumps(response_body)}"
+        else:
+            line += f"\n  response body: {response_body}"
+    _TRANSCRIPT_LINES.append(line)
+
+
+class _TranscriptClient:
+    """Wrapper around the Flask test client that logs each request/response."""
+
+    def __init__(self, client):
+        self._client = client
+
+    def _log(self, method, path, response, body=None):
+        try:
+            resp_body = response.get_json()
+        except Exception:
+            resp_body = response.get_data(as_text=True)
+        _record_exchange(method, path, response.status_code, body=body,
+                         response_body=resp_body)
+        return response
+
+    def get(self, path, **kwargs):
+        response = self._client.get(path, **kwargs)
+        return self._log('GET', path, response)
+
+    def post(self, path, json=None, **kwargs):
+        response = self._client.post(path, json=json, **kwargs)
+        return self._log('POST', path, response, body=json)
+
+    def put(self, path, json=None, **kwargs):
+        response = self._client.put(path, json=json, **kwargs)
+        return self._log('PUT', path, response, body=json)
+
+    def delete(self, path, **kwargs):
+        response = self._client.delete(path, **kwargs)
+        return self._log('DELETE', path, response)
+
+    def __getattr__(self, name):
+        # Delegate any other accessors (e.g. .get_data) to the wrapped client.
+        return getattr(self._client, name)
+
+
+>>>>>>> 47172f7 (runctl: build runctl/build-5c677d80 (pass))
 @pytest.fixture
 def test_db_path():
     """Create a temporary database file for testing."""
@@ -48,7 +116,17 @@ def app(test_db_path):
 
 @pytest.fixture
 def client(app):
+<<<<<<< HEAD
     """Create test client for Flask app."""
+=======
+    """Create test client for Flask app, wrapped to capture a transcript."""
+    return _TranscriptClient(app.test_client())
+
+
+@pytest.fixture
+def raw_client(app):
+    """Unwrapped test client for tests that need direct access."""
+>>>>>>> 47172f7 (runctl: build runctl/build-5c677d80 (pass))
     return app.test_client()
 
 
@@ -60,6 +138,40 @@ def repository(test_db_path):
     return MedicationRepository(db)
 
 
+<<<<<<< HEAD
+=======
+@pytest.fixture(autouse=True)
+def _transcript_section(request):
+    """Mark each test's transcript entries with a section header."""
+    _TRANSCRIPT_LINES.append(f"\n\n=== {request.node.nodeid} ===")
+    yield
+    _TRANSCRIPT_LINES.append(f"\n--- end {request.node.nodeid} ---")
+
+
+def _write_transcript():
+    """Flush the captured transcript to the evidence directory."""
+    EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
+    header = (
+        "=== MEDICATION TRACKER — MILESTONE EVIDENCE CONSOLE TRANSCRIPT ===\n"
+        f"Date: {date.today().isoformat()}\n"
+        "Gate command: pytest tests/functional/test_medicine_tracker.py -v --cov\n"
+        "Evidence type: readable console transcript of real HTTP request/response pairs\n"
+        "Captured from: Flask test client exercising the medication list UI backend contract\n"
+        "\nBelow is every HTTP exchange the functional gate performed against the app:\n"
+    )
+    (EVIDENCE_DIR / 'console-transcript.txt').write_text(
+        header + "\n".join(_TRANSCRIPT_LINES) + "\n"
+    )
+
+
+@pytest.fixture(scope='session', autouse=True)
+def _flush_transcript(request):
+    """Write the transcript to disk once the full session completes."""
+    yield
+    _write_transcript()
+
+
+>>>>>>> 47172f7 (runctl: build runctl/build-5c677d80 (pass))
 class TestFunctionalMedicationAPI:
     """Functional tests for medication API endpoints."""
 
@@ -238,7 +350,11 @@ class TestFunctionalMedicationAPI:
         repository.create(medication)
 
         # Mark as taken
+<<<<<<< HEAD
         response = client.post(f'/medications/{medication.id}/dose', json={})
+=======
+        response = client.post(f'/medications/{medication.id}/doses', json={})
+>>>>>>> 47172f7 (runctl: build runctl/build-5c677d80 (pass))
         assert response.status_code == 201
         data = response.get_json()
         assert data['medication_id'] == str(medication.id)
@@ -254,7 +370,11 @@ class TestFunctionalMedicationAPI:
         )
         repository.create(medication)
 
+<<<<<<< HEAD
         response = client.post(f'/medications/{medication.id}/dose', json={
+=======
+        response = client.post(f'/medications/{medication.id}/doses', json={
+>>>>>>> 47172f7 (runctl: build runctl/build-5c677d80 (pass))
             'date': '2026-09-20'
         })
 
@@ -539,3 +659,189 @@ class TestFunctionalMedicationList:
         assert response.status_code == 200
         data = response.get_json()
         assert data['status'] == 'healthy'
+<<<<<<< HEAD
+=======
+
+
+class TestMedicationListUIIntegration:
+    """Functional tests for the medication list UI and its API integration.
+
+    These tests exercise the contract the component-based frontend relies on:
+    static asset delivery, filter re-querying, edit form pre-population via
+    GET-by-id, delete confirmation flow, and optimistic-update rollback support.
+    """
+
+    def test_index_page_serves_component_html(self, client):
+        """The index page loads and references the component JS/CSS bundles."""
+        response = client.get('/')
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert 'js/app.js' in html
+        assert 'js/medication-list.js' in html
+        assert 'js/medication-form.js' in html
+        assert 'js/delete-dialog.js' in html
+        assert 'css/styles.css' in html
+        # Filter toggle buttons present for All/Active/Completed.
+        assert 'data-filter="all"' in html
+        assert 'data-filter="active"' in html
+        assert 'data-filter="completed"' in html
+
+    def test_static_component_assets_are_served(self, client):
+        """Each frontend component file is retrievable via its static URL."""
+        for asset in ('js/api.js', 'js/toast.js', 'js/medication-form.js',
+                      'js/delete-dialog.js', 'js/medication-list.js',
+                      'js/app.js', 'css/styles.css'):
+            response = client.get(f'/{asset}')
+            assert response.status_code == 200, f"{asset} returned {response.status_code}"
+            assert len(response.get_data()) > 0, f"{asset} is empty"
+
+    def test_filter_requery_returns_only_matching_status(self, client, repository):
+        """Switching the filter re-queries the API and returns only matching medications."""
+        active = Medication(name='Active Med', dosage='100mg', frequency='daily')
+        completed = Medication(
+            name='Completed Med', dosage='200mg', frequency='daily',
+            status=MedicationStatus.COMPLETED,
+        )
+        repository.create(active)
+        repository.create(completed)
+
+        # All filter
+        all_resp = client.get('/medications?status=all')
+        assert all_resp.status_code == 200
+        assert len(all_resp.get_json()) == 2
+
+        # Active filter
+        active_resp = client.get('/medications?status=active')
+        assert active_resp.status_code == 200
+        active_meds = active_resp.get_json()
+        assert len(active_meds) == 1
+        assert active_meds[0]['name'] == 'Active Med'
+        assert all(m['status'] == 'active' for m in active_meds)
+
+        # Completed filter
+        completed_resp = client.get('/medications?status=completed')
+        assert completed_resp.status_code == 200
+        completed_meds = completed_resp.get_json()
+        assert len(completed_meds) == 1
+        assert completed_meds[0]['name'] == 'Completed Med'
+        assert all(m['status'] == 'completed' for m in completed_meds)
+
+    def test_edit_form_prepopulation_via_get_by_id(self, client, repository):
+        """Edit action fetches the medication by ID to pre-populate the form."""
+        medication = Medication(
+            name='Original',
+            dosage='100mg',
+            frequency='daily',
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 14),
+            status=MedicationStatus.ACTIVE,
+        )
+        repository.create(medication)
+
+        response = client.get(f'/medications/{medication.id}')
+        assert response.status_code == 200
+        data = response.get_json()
+        # Every field the form pre-populates must be present and correct.
+        assert data['id'] == str(medication.id)
+        assert data['name'] == 'Original'
+        assert data['dosage'] == '100mg'
+        assert data['frequency'] == 'daily'
+        assert data['start_date'] == '2026-01-01'
+        assert data['end_date'] == '2026-01-14'
+        assert data['status'] == 'active'
+
+    def test_edit_save_persists_via_put(self, client, repository):
+        """Submitting the edit form calls PUT and changes persist."""
+        medication = Medication(
+            name='Original', dosage='100mg', frequency='daily',
+        )
+        repository.create(medication)
+
+        response = client.put(f'/medications/{medication.id}', json={
+            'name': 'Edited Name',
+            'dosage': '250mg',
+            'frequency': 'three times daily',
+            'status': 'completed',
+        })
+        assert response.status_code == 200
+        updated = response.get_json()
+        assert updated['name'] == 'Edited Name'
+        assert updated['dosage'] == '250mg'
+        assert updated['frequency'] == 'three times daily'
+        assert updated['status'] == 'completed'
+
+        # Persistence verified via fresh repository read.
+        retrieved = repository.get_by_id(medication.id)
+        assert retrieved.name == 'Edited Name'
+        assert retrieved.dosage == '250mg'
+        assert retrieved.status == MedicationStatus.COMPLETED
+
+    def test_delete_confirmation_flow_removes_medication(self, client, repository):
+        """Delete confirmation calls DELETE and removes the medication from the list."""
+        medication = Medication(
+            name='ToDelete', dosage='50mg', frequency='daily',
+        )
+        repository.create(medication)
+
+        delete_resp = client.delete(f'/medications/{medication.id}')
+        assert delete_resp.status_code == 204
+
+        # The medication is no longer in the list.
+        list_resp = client.get('/medications')
+        assert list_resp.status_code == 200
+        medications = list_resp.get_json()
+        assert len(medications) == 0
+
+        # And a direct GET returns 404.
+        get_resp = client.get(f'/medications/{medication.id}')
+        assert get_resp.status_code == 404
+
+    def test_full_list_filter_edit_delete_cycle(self, client, repository):
+        """Full cycle: add (via repo), list, filter, edit, delete — UI flow contract."""
+        med1 = Medication(name='Med One', dosage='100mg', frequency='daily')
+        med2 = Medication(name='Med Two', dosage='200mg', frequency='daily',
+                          status=MedicationStatus.COMPLETED)
+        repository.create(med1)
+        repository.create(med2)
+
+        # List all (sorted most-recent first)
+        all_resp = client.get('/medications')
+        all_meds = all_resp.get_json()
+        assert len(all_meds) == 2
+
+        # Filter active shows only med1
+        active_resp = client.get('/medications?status=active')
+        assert len(active_resp.get_json()) == 1
+        assert active_resp.get_json()[0]['name'] == 'Med One'
+
+        # Edit med1 to completed via PUT (simulating edit form submit)
+        edit_resp = client.put(f'/medications/{med1.id}', json={'status': 'completed'})
+        assert edit_resp.status_code == 200
+        assert edit_resp.get_json()['status'] == 'completed'
+
+        # Now active filter is empty, completed has 2
+        assert len(client.get('/medications?status=active').get_json()) == 0
+        assert len(client.get('/medications?status=completed').get_json()) == 2
+
+        # Delete med2
+        del_resp = client.delete(f'/medications/{med2.id}')
+        assert del_resp.status_code == 204
+
+        # All filter now has 1 (med1, which is completed)
+        remaining = client.get('/medications').get_json()
+        assert len(remaining) == 1
+        assert remaining[0]['name'] == 'Med One'
+
+    def test_invalid_filter_value_returns_400(self, client):
+        """An invalid status filter returns a 400 error (UI shows error toast)."""
+        response = client.get('/medications?status=invalid')
+        assert response.status_code == 400
+        data = response.get_json()
+        assert 'error' in data
+
+    def test_empty_state_api_contract(self, client):
+        """Empty active filter returns an empty array (UI shows empty state CTA)."""
+        response = client.get('/medications?status=active')
+        assert response.status_code == 200
+        assert response.get_json() == []
+>>>>>>> 47172f7 (runctl: build runctl/build-5c677d80 (pass))
