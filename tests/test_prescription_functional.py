@@ -1,16 +1,33 @@
-"""Functional tests for the prescription tracker HTTP API.
+"""Functional / integration tests for the prescription tracker.
 
-These tests spin up the FastAPI app with TestClient against a per-test
-temporary on-disk SQLite database (via MEDICATION_TRACKER_DB) so that
-foreign-key enforcement, CHECK constraints and the partial unique index
-all exercise the real schema. They cover the full create -> retrieve ->
-discontinue -> history flow plus validation and the 500ms SLO.
+This module exercises two layers end to end:
+
+1. **The HTTP API** (FastAPI ``TestClient`` against a per-test temporary
+   on-disk SQLite database via ``MEDICATION_TRACKER_DB``) so that foreign-key
+   enforcement, CHECK constraints and the partial unique index all exercise
+   the real schema. It covers the full create -> retrieve -> discontinue ->
+   history flow plus validation and the 500ms SLO, and writes a console
+   transcript of the real requests/responses into ``.see/e2e-artifacts/``.
+
+2. **The repository + validation layer** (in-memory SQLite via
+   :func:`init_schema`) covering the end-to-end Definition of Done:
+   create, retrieve, update (transition), and deactivate without data loss;
+   dose adherence events recorded with timestamps, history queryable per
+   medication sorted by time; validation rejects incomplete / malformed /
+   end-before-start at the boundary; discontinuing requires a reason and
+   preserves the historical record with a transition timestamp; two
+   concurrent active prescriptions for the same medicine rejected by the
+   unique constraint; prescription history returns all entries sorted by
+   start date descending, including discontinued and completed; single
+   -patient operations respond within 500ms. This path also writes a
+   readable transcript of the real service operations exercised.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import time
 import uuid
 from pathlib import Path
@@ -19,21 +36,29 @@ from typing import Iterator, List
 import pytest
 from fastapi.testclient import TestClient
 
+from medication_tracker.errors import ValidationError
+from medication_tracker.models import PrescriptionStatus
+from medication_tracker.repository import PrescriptionRepository, init_schema
+from medication_tracker.validators import validate_prescription
 
 # --------------------------------------------------------------------------- #
 # Evidence-capture helpers
 # --------------------------------------------------------------------------- #
-# The functional gate exercises the prescription-tracker HTTP API end to end.
-# To leave a readable record that the milestone actually works, the gate run
-# also writes a console transcript of the real requests/responses into
-# .see/e2e-artifacts/. The transcript is produced by a dedicated test
+# The functional gate exercises the prescription-tracker HTTP API end to end
+# and the repository layer end to end. To leave a readable record that the
+# milestone actually works, the gate run also writes console transcripts of
+# the real requests/responses and repository operations into
+# .see/e2e-artifacts/. The HTTP transcript is produced by a dedicated test
 # (test_evidence_transcript) that replays the full lifecycle against the live
-# app — it does not relax any assertion; it asserts the same outcomes the
-# behavioural tests do, while logging each exchange.
+# app; the repository transcript is assembled incrementally by the
+# repository-layer tests via _log(). Neither relaxes any assertion; they
+# assert the same outcomes the behavioural tests do, while logging each
+# exchange.
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ARTIFACTS_DIR = REPO_ROOT / ".see" / "e2e-artifacts"
 TRANSCRIPT_PATH = ARTIFACTS_DIR / "console-transcript.txt"
+REPOSITORY_TRANSCRIPT_PATH = ARTIFACTS_DIR / "repository-transcript.txt"
 
 
 @pytest.fixture(autouse=True)
@@ -42,20 +67,19 @@ def _ensure_artifacts_dir() -> Iterator[None]:
     yield
 
 
+# --------------------------------------------------------------------------- #
+# HTTP API fixtures
+# --------------------------------------------------------------------------- #
+
 @pytest.fixture
 def db_path(tmp_path: Path) -> Path:
     return tmp_path / "functional.db"
 
 
-@pytest.fixture(autouse=True)
-def env(db_path: Path, monkeypatch) -> Iterator[None]:
-    monkeypatch.setenv("MEDICATION_TRACKER_DB", str(db_path))
-    yield
-
-
 @pytest.fixture
-def client() -> Iterator[TestClient]:
-    # Import after the env fixture has set MEDICATION_TRACKER_DB.
+def client(db_path: Path, monkeypatch) -> Iterator[TestClient]:
+    # Import after the env var has been set so the app picks up the per-test db.
+    monkeypatch.setenv("MEDICATION_TRACKER_DB", str(db_path))
     from medication_tracker.app import create_app
 
     with TestClient(create_app()) as c:
@@ -80,7 +104,54 @@ class Transcript:
 
 
 # --------------------------------------------------------------------------- #
-# Helpers
+# Repository-layer fixtures + transcript
+# --------------------------------------------------------------------------- #
+
+PATIENT_ID = "11111111-1111-1111-1111-111111111111"
+DOCTOR_ID = "22222222-2222-2222-2222-222222222222"
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _transcript_recorder():
+    """Open a readable transcript of the real repository operations exercised here.
+
+    Each test appends labelled lines (operation + outcome) to
+    ``.see/e2e-artifacts/repository-transcript.txt`` so the milestone's
+    behaviour is captured as a human-readable console transcript, not just
+    pass/fail. A separate file from the HTTP transcript so both records
+    survive the gate run.
+    """
+    os.makedirs(_ARTIFACTS_STR, exist_ok=True)
+    with open(_REPOSITORY_TRANSCRIPT_STR, "w") as fh:
+        fh.write("Prescription tracker — repository functional gate console transcript\n")
+        fh.write("=" * 60 + "\n\n")
+    yield
+    # nothing to flush; each helper opens in append mode
+
+
+_ARTIFACTS_STR = os.path.join(os.path.dirname(__file__), "..", ".see", "e2e-artifacts")
+_REPOSITORY_TRANSCRIPT_STR = os.path.join(_ARTIFACTS_STR, "repository-transcript.txt")
+
+
+def _log(line: str) -> None:
+    """Append one section line to the repository console transcript artifact."""
+    with open(_REPOSITORY_TRANSCRIPT_STR, "a") as fh:
+        fh.write(line.rstrip("\n") + "\n")
+
+
+@pytest.fixture
+def repo():
+    conn = sqlite3.connect(":memory:")
+    conn.execute("PRAGMA foreign_keys = ON;")
+    init_schema(conn)
+    r = PrescriptionRepository(conn)
+    r.add_patient(PATIENT_ID)
+    r.add_doctor(DOCTOR_ID)
+    return r
+
+
+# --------------------------------------------------------------------------- #
+# Payload helpers
 # --------------------------------------------------------------------------- #
 
 def _valid_payload(doctor_id: str | None = None, **overrides):
@@ -98,8 +169,27 @@ def _valid_payload(doctor_id: str | None = None, **overrides):
     return base
 
 
+def rx_data(**overrides):
+    base = {
+        "patient_id": PATIENT_ID,
+        "doctor_id": DOCTOR_ID,
+        "medicine_name": "Amoxicillin",
+        "dosage_amount": 500,
+        "dosage_unit": "mg",
+        "frequency": "twice daily",
+        "start_date": "2026-01-01T08:00:00+00:00",
+    }
+    base.update(overrides)
+    return base
+
+
+def _create(repo, **overrides):
+    rx = validate_prescription(rx_data(**overrides))
+    return repo.create(rx)
+
+
 # --------------------------------------------------------------------------- #
-# Create + retrieve
+# HTTP API: Create + retrieve
 # --------------------------------------------------------------------------- #
 
 def test_create_and_retrieve_prescription(client):
@@ -131,7 +221,7 @@ def test_retrieve_unknown_prescription_returns_404(client):
 
 
 # --------------------------------------------------------------------------- #
-# Validation -> 400, nothing persisted
+# HTTP API: Validation -> 400, nothing persisted
 # --------------------------------------------------------------------------- #
 
 def test_missing_required_field_rejected(client):
@@ -173,7 +263,7 @@ def test_naive_datetime_rejected(client):
 
 
 # --------------------------------------------------------------------------- #
-# One active prescription per medicine per patient
+# HTTP API: One active prescription per medicine per patient
 # --------------------------------------------------------------------------- #
 
 def test_second_active_same_medicine_rejected(client):
@@ -224,7 +314,7 @@ def test_second_active_after_discontinuation_succeeds(client):
 
 
 # --------------------------------------------------------------------------- #
-# Discontinue lifecycle
+# HTTP API: Discontinue lifecycle
 # --------------------------------------------------------------------------- #
 
 def test_discontinue_without_reason_rejected(client):
@@ -284,7 +374,7 @@ def test_complete_prescription(client):
 
 
 # --------------------------------------------------------------------------- #
-# History ordering and completeness
+# HTTP API: History ordering and completeness
 # --------------------------------------------------------------------------- #
 
 def test_history_sorted_by_start_date_desc_with_all_statuses(client):
@@ -327,7 +417,7 @@ def test_history_sorted_by_start_date_desc_with_all_statuses(client):
 
 
 # --------------------------------------------------------------------------- #
-# 500ms SLO on single-patient endpoints
+# HTTP API: 500ms SLO on single-patient endpoints
 # --------------------------------------------------------------------------- #
 
 @pytest.mark.parametrize(
@@ -355,7 +445,7 @@ def test_single_patient_endpoints_under_500ms(client, method, path_builder):
 
 
 # --------------------------------------------------------------------------- #
-# Milestone evidence: console transcript of the real API lifecycle
+# HTTP API: Milestone evidence — console transcript of the real API lifecycle
 # --------------------------------------------------------------------------- #
 # This test replays the full prescription-tracker lifecycle against the live
 # FastAPI app (same TestClient + on-disk SQLite path as the behavioural tests)
@@ -479,3 +569,196 @@ def test_evidence_transcript(client):
 
     t.write(TRANSCRIPT_PATH)
     assert TRANSCRIPT_PATH.exists() and TRANSCRIPT_PATH.stat().st_size > 0
+
+
+# --------------------------------------------------------------------------
+# Repository layer: End-to-end create / retrieve / transition / deactivate
+# --------------------------------------------------------------------------
+
+class TestEndToEndLifecycle:
+    def test_create_retrieve_transition_deactivate_without_data_loss(self, repo):
+        rx = _create(repo)
+        fetched = repo.get_by_id(rx.id)
+        _log(f"[create] POST prescription -> id={rx.id} medicine={rx.medicine_name} "
+             f"dosage={rx.dosage_amount}{rx.dosage_unit} status={rx.status.value}")
+        _log(f"[retrieve] GET by id -> medicine={fetched.medicine_name} "
+             f"dosage={fetched.dosage_amount}{fetched.dosage_unit} status={fetched.status.value}")
+        assert fetched.medicine_name == "Amoxicillin"
+        assert fetched.dosage_amount == 500.0
+        assert fetched.dosage_unit == "mg"
+        assert fetched.status == PrescriptionStatus.ACTIVE
+
+        # Transition active -> completed.
+        completed = repo.complete(rx.id)
+        _log(f"[transition] complete({rx.id}) -> status={completed.status.value} "
+             f"medicine={completed.medicine_name} (no data loss)")
+        assert completed.status == PrescriptionStatus.COMPLETED
+        assert completed.medicine_name == "Amoxicillin"
+        assert completed.dosage_amount == 500.0  # no data loss
+
+        # Create a second active prescription then deactivate (discontinue) it.
+        rx2 = _create(repo, medicine_name="Metformin", start_date="2026-02-01T08:00:00+00:00")
+        discontinued = repo.discontinue(rx2.id, "patient switched therapy")
+        _log(f"[transition] discontinue({rx2.id}, reason='patient switched therapy') "
+             f"-> status={discontinued.status.value} medicine={discontinued.medicine_name}")
+        assert discontinued.status == PrescriptionStatus.DISCONTINUED
+        # Original fields preserved after discontinue.
+        assert discontinued.medicine_name == "Metformin"
+        assert discontinued.patient_id == PATIENT_ID
+
+
+# --------------------------------------------------------------------------
+# Repository layer: Dose adherence logging
+# --------------------------------------------------------------------------
+
+class TestDoseAdherence:
+    def test_dose_events_recorded_with_timestamps(self, repo):
+        rx = _create(repo)
+        repo.log_dose(rx.id, "taken", "2026-01-01T08:00:00+00:00")
+        repo.log_dose(rx.id, "skipped", "2026-01-01T20:00:00+00:00")
+        history = repo.list_dose_logs(rx.id)
+        _log(f"[dose-log] log_dose taken@08:00, skipped@20:00 -> {len(history)} events")
+        for h in history:
+            _log(f"  - {h['event']} @ {h['logged_at']}")
+        assert len(history) == 2
+        assert history[0]["event"] == "taken"
+        assert history[1]["event"] == "skipped"
+        # Sorted by logged_at ascending.
+        assert history[0]["logged_at"] <= history[1]["logged_at"]
+
+    def test_dose_log_rejects_unknown_event(self, repo):
+        rx = _create(repo)
+        with pytest.raises(ValueError):
+            repo.log_dose(rx.id, "maybe", "2026-01-01T08:00:00+00:00")
+        _log("[dose-log] log_dose(event='maybe') -> rejected ValueError (unknown event)")
+
+    def test_dose_log_rejects_discontinued_prescription(self, repo):
+        rx = _create(repo)
+        repo.discontinue(rx.id, "adverse reaction")
+        with pytest.raises(ValueError):
+            repo.log_dose(rx.id, "taken", "2026-01-02T08:00:00+00:00")
+        _log("[dose-log] log_dose against discontinued prescription -> rejected ValueError")
+
+
+# --------------------------------------------------------------------------
+# Repository layer: Validation at the boundary
+# --------------------------------------------------------------------------
+
+class TestBoundaryValidation:
+    def test_rejects_incomplete_prescription(self, repo):
+        with pytest.raises(ValidationError):
+            repo.create_prescription(rx_data(medicine_name=None))
+        _log("[validation] create_prescription(missing medicine_name) -> rejected ValidationError")
+
+    def test_rejects_malformed_datetime(self, repo):
+        with pytest.raises(ValidationError):
+            repo.create_prescription(rx_data(start_date="not-a-date"))
+        _log("[validation] create_prescription(start_date='not-a-date') -> rejected ValidationError")
+
+    def test_rejects_end_before_start(self, repo):
+        with pytest.raises(ValidationError):
+            repo.create_prescription(
+                rx_data(
+                    start_date="2026-02-01T08:00:00+00:00",
+                    end_date="2026-01-01T08:00:00+00:00",
+                )
+            )
+        _log("[validation] create_prescription(end_date < start_date) -> rejected ValidationError")
+
+    def test_rejects_naive_datetime(self, repo):
+        with pytest.raises(ValidationError):
+            repo.create_prescription(rx_data(start_date="2026-01-01T08:00:00"))
+        _log("[validation] create_prescription(naive datetime, no tz) -> rejected ValidationError")
+
+
+# --------------------------------------------------------------------------
+# Repository layer: Discontinue preserves history + transition timestamp
+# --------------------------------------------------------------------------
+
+class TestDiscontinuePreservesHistory:
+    def test_discontinue_requires_reason_and_preserves_record(self, repo):
+        rx = _create(repo)
+        with pytest.raises(ValueError):
+            repo.discontinue(rx.id, "")
+        _log("[discontinue] discontinue(reason='') -> rejected ValueError (reason required)")
+        discontinued = repo.discontinue(rx.id, "side effects")
+        assert discontinued.status == PrescriptionStatus.DISCONTINUED
+
+        transitions = repo.list_transitions(rx.id)
+        assert len(transitions) == 1
+        assert transitions[0]["reason"] == "side effects"
+        assert "T" in transitions[0]["transitioned_at"]
+        _log(f"[discontinue] discontinue(reason='side effects') -> status={discontinued.status.value}, "
+             f"transition recorded @ {transitions[0]['transitioned_at']}")
+
+        # Historical record still present and intact.
+        fetched = repo.get_by_id(rx.id)
+        assert fetched is not None
+        assert fetched.medicine_name == "Amoxicillin"
+        _log(f"[discontinue] historical record preserved: medicine={fetched.medicine_name} "
+             f"status={fetched.status.value}")
+
+
+# --------------------------------------------------------------------------
+# Repository layer: Concurrent active uniqueness
+# --------------------------------------------------------------------------
+
+class TestConcurrentActiveUniqueness:
+    def test_two_concurrent_active_rejected(self, repo):
+        _create(repo, start_date="2026-01-01T08:00:00+00:00")
+        with pytest.raises(sqlite3.IntegrityError):
+            _create(repo, start_date="2026-01-05T08:00:00+00:00")
+        _log("[uniqueness] second concurrent active Amoxicillin -> rejected sqlite3.IntegrityError")
+
+    def test_completed_then_represcribed_allowed(self, repo):
+        first = _create(repo, start_date="2025-01-01T08:00:00+00:00")
+        repo.complete(first.id)
+        second = _create(repo, start_date="2026-01-01T08:00:00+00:00")
+        assert repo.get_by_id(second.id) is not None
+        _log(f"[uniqueness] after completing first, re-prescribe allowed -> new id={second.id}")
+
+
+# --------------------------------------------------------------------------
+# Repository layer: History completeness + ordering
+# --------------------------------------------------------------------------
+
+class TestHistoryCompleteness:
+    def test_history_includes_all_statuses_sorted_desc(self, repo):
+        oldest = _create(repo, medicine_name="DrugA", start_date="2024-01-01T08:00:00+00:00")
+        repo.complete(oldest.id)
+
+        middle = _create(repo, medicine_name="DrugB", start_date="2025-01-01T08:00:00+00:00")
+        repo.discontinue(middle.id, "ineffective")
+
+        newest = _create(repo, medicine_name="DrugC", start_date="2026-01-01T08:00:00+00:00")
+
+        history = repo.list_by_patient(PATIENT_ID)
+        statuses = {h.status for h in history}
+        assert PrescriptionStatus.COMPLETED in statuses
+        assert PrescriptionStatus.DISCONTINUED in statuses
+        assert PrescriptionStatus.ACTIVE in statuses
+        assert len(history) == 3
+        # Sorted by start_date descending.
+        dates = [h.start_date for h in history]
+        assert dates == sorted(dates, reverse=True)
+        assert history[0].medicine_name == "DrugC"
+        _log(f"[history] list_by_patient -> {len(history)} entries sorted by start_date DESC:")
+        for h in history:
+            _log(f"  - {h.medicine_name} start={h.start_date} status={h.status.value}")
+
+
+# --------------------------------------------------------------------------
+# Repository layer: Performance — single-patient operations under 500ms
+# --------------------------------------------------------------------------
+
+class TestPerformance:
+    def test_single_patient_operations_under_500ms(self, repo):
+        start = time.perf_counter()
+        rx = _create(repo, medicine_name="PerfDrug")
+        repo.get_by_id(rx.id)
+        repo.list_by_patient(PATIENT_ID)
+        repo.complete(rx.id)
+        repo.list_dose_logs(rx.id)
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        assert elapsed_ms < 500, f"operations took {elapsed_ms:.1f}ms"
+        _log(f"[perf] create+get+list+complete+list_dose_logs -> {elapsed_ms:.2f}ms (< 500ms)")

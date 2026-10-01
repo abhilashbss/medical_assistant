@@ -1,0 +1,26 @@
+Prescription tracker — functional gate console transcript
+============================================================
+
+[create] POST prescription -> id=09cf3fdb-cefe-40bd-83ae-0c7bee4f2777 medicine=Amoxicillin dosage=500.0mg status=active
+[retrieve] GET by id -> medicine=Amoxicillin dosage=500.0mg status=active
+[transition] complete(09cf3fdb-cefe-40bd-83ae-0c7bee4f2777) -> status=completed medicine=Amoxicillin (no data loss)
+[transition] discontinue(d1b937a4-425e-4379-b62a-97fee73e747d, reason='patient switched therapy') -> status=discontinued medicine=Metformin
+[dose-log] log_dose taken@08:00, skipped@20:00 -> 2 events
+  - taken @ 2026-01-01T08:00:00+00:00
+  - skipped @ 2026-01-01T20:00:00+00:00
+[dose-log] log_dose(event='maybe') -> rejected ValueError (unknown event)
+[dose-log] log_dose against discontinued prescription -> rejected ValueError
+[validation] create_prescription(missing medicine_name) -> rejected ValidationError
+[validation] create_prescription(start_date='not-a-date') -> rejected ValidationError
+[validation] create_prescription(end_date < start_date) -> rejected ValidationError
+[validation] create_prescription(naive datetime, no tz) -> rejected ValidationError
+[discontinue] discontinue(reason='') -> rejected ValueError (reason required)
+[discontinue] discontinue(reason='side effects') -> status=discontinued, transition recorded @ 2026-10-01T09:07:40.505921+00:00
+[discontinue] historical record preserved: medicine=Amoxicillin status=discontinued
+[uniqueness] second concurrent active Amoxicillin -> rejected sqlite3.IntegrityError
+[uniqueness] after completing first, re-prescribe allowed -> new id=ba6d3aa1-139f-436a-85ae-c1663ae759e2
+[history] list_by_patient -> 3 entries sorted by start_date DESC:
+  - DrugC start=2026-01-01T08:00:00+00:00 status=active
+  - DrugB start=2025-01-01T08:00:00+00:00 status=discontinued
+  - DrugA start=2024-01-01T08:00:00+00:00 status=completed
+[perf] create+get+list+complete+list_dose_logs -> 0.18ms (< 500ms)
