@@ -17,12 +17,15 @@ def create_app(db_path: str = None, static_folder: str = None):
 
     Args:
         db_path: Path to SQLite database file. Defaults to medications.db in current directory.
-        static_folder: Path to static files folder. Defaults to 'static' in parent directory.
+        static_folder: Path to static files folder. Defaults to the 'static' directory
+            at the repository root (sibling of the medication_tracker package).
 
     Returns:
         Configured Flask application
     """
-    app = Flask(__name__, static_folder=static_folder or 'static')
+    if static_folder is None:
+        static_folder = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'static')
+    app = Flask(__name__, static_folder=static_folder)
     CORS(app)
 
     # Initialize database
@@ -284,6 +287,11 @@ def create_app(db_path: str = None, static_folder: str = None):
     def serve_index():
         """Serve the main HTML page."""
         return send_from_directory(app.static_folder, 'index.html')
+
+    @app.route('/<path:filename>')
+    def serve_static(filename):
+        """Serve static assets (js, css) from the static folder."""
+        return send_from_directory(app.static_folder, filename)
 
     return app
 
