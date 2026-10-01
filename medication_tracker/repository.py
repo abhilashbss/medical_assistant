@@ -1,8 +1,9 @@
 """Medication repository for database operations."""
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import List, Optional
 from uuid import UUID, uuid4
+import sqlite3
 
 from .database import Database
 from .models import DoseRecord, Medication, MedicationStatus
@@ -198,7 +199,7 @@ class MedicationRepository:
             List of dose records
         """
         query = "SELECT * FROM dose_records WHERE medication_id = ?"
-        params = [str(medication_id)]
+        params: list = [str(medication_id)]
 
         if start_date:
             query += " AND date >= ?"

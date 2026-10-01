@@ -1,5 +1,6 @@
 -- Migration: Create dose_records table
 -- Description: Defines the schema for tracking medication dose adherence
+<<<<<<< HEAD
 -- Created: 2026-09-24
 
 -- Create dose_records table with all required fields
@@ -26,6 +27,17 @@ CREATE TABLE IF NOT EXISTS dose_records (
     CONSTRAINT chk_dose_status CHECK (status IN ('taken', 'skipped', 'missed')),
 
     -- Unique constraint: prevent duplicate dose records for same medication on same date
+=======
+
+CREATE TABLE IF NOT EXISTS dose_records (
+    id TEXT PRIMARY KEY,
+    medication_id TEXT NOT NULL,
+    date TEXT NOT NULL,
+    timestamp TEXT,
+    status TEXT DEFAULT 'taken' NOT NULL,
+    FOREIGN KEY (medication_id) REFERENCES medications(id) ON DELETE CASCADE,
+    CONSTRAINT chk_dose_status CHECK (status IN ('taken', 'skipped', 'missed')),
+>>>>>>> 9105369 (runctl: build runctl/build-09d3fc65 (pass))
     CONSTRAINT unique_medication_date UNIQUE (medication_id, date)
 );
 
@@ -36,6 +48,7 @@ CREATE INDEX IF NOT EXISTS idx_dose_records_medication_id ON dose_records(medica
 CREATE INDEX IF NOT EXISTS idx_dose_records_date ON dose_records(date);
 
 -- Composite index for common query pattern: medication + date range
+<<<<<<< HEAD
 CREATE INDEX IF NOT EXISTS idx_dose_records_medication_date ON dose_records(medication_id, date DESC);
 
 -- Comment on table
@@ -47,3 +60,6 @@ COMMENT ON COLUMN dose_records.medication_id IS 'Reference to the medication thi
 COMMENT ON COLUMN dose_records.date IS 'Date the dose was taken or scheduled';
 COMMENT ON COLUMN dose_records.timestamp IS 'Exact timestamp when dose was recorded (ISO format)';
 COMMENT ON COLUMN dose_records.status IS 'Dose status: taken, skipped, or missed';
+=======
+CREATE INDEX IF NOT EXISTS idx_dose_records_medication_date ON dose_records(medication_id, date DESC);
+>>>>>>> 9105369 (runctl: build runctl/build-09d3fc65 (pass))

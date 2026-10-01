@@ -128,12 +128,18 @@ class DoseRecord:
 
     def __post_init__(self):
         """Validate dose record fields."""
+        if not isinstance(self.medication_id, (UUID,)):
+            raise ValueError("medication_id must be a UUID")
+
+        if not isinstance(self.date, date):
+            raise ValueError("date must be a date object")
+
         # Validate date cannot be in the future
         if self.date > date.today():
             raise ValueError("date cannot be in the future")
 
         # Validate status is a valid enum value
-        valid_statuses = {"taken", "skipped", "missed"}
+        valid_statuses = {s.value for s in DoseStatus}
         if self.status not in valid_statuses:
             raise ValueError(f"status must be one of {valid_statuses}, got '{self.status}'")
 

@@ -1,11 +1,29 @@
 """Dose service for medication dose tracking."""
 
-from datetime import date, datetime
+import os
+from datetime import date, datetime, timezone
 from typing import List, Optional
 from uuid import UUID
 
 from .database import Database
 from .models import DoseRecord, DoseStatus
+
+
+def _today() -> date:
+    """Return today's date, honoring the DATE_TIMEZONE env var when set.
+
+    DATE_TIMEZONE defaults to UTC. This keeps date handling consistent across
+    deployments regardless of the host machine's local timezone.
+    """
+    tz_name = os.environ.get("DATE_TIMEZONE", "UTC")
+    if tz_name and tz_name.upper() != "UTC":
+        try:
+            from zoneinfo import ZoneInfo
+
+            return datetime.now(ZoneInfo(tz_name)).date()
+        except Exception:
+            return datetime.now(timezone.utc).date()
+    return datetime.now(timezone.utc).date()
 
 
 class DoseService:
@@ -34,16 +52,18 @@ class DoseService:
             ConflictError: If dose already exists for the medication on the given date
         """
         if dose_date is None:
-            dose_date = date.today()
+            dose_date = _today()
 
         # Validate date is not in the future
-        if dose_date > date.today():
+        if dose_date > _today():
             raise ValueError("Cannot mark dose for a future date")
 
         # Check if dose already exists for this medication on this date (idempotency check)
         existing = self._get_dose_for_date(medication_id, dose_date)
         if existing is not None:
-            raise ConflictError(f"Dose already recorded for medication {medication_id} on {dose_date}")
+            raise ConflictError(
+                f"Dose already recorded for medication {medication_id} on {dose_date}"
+            )
 
         # Create new dose record
         dose = DoseRecord(
@@ -68,12 +88,14 @@ class DoseService:
             ValueError: If dose_date is in the future
             ConflictError: If dose already exists for the medication on the given date
         """
-        if dose_date > date.today():
+        if dose_date > _today():
             raise ValueError("Cannot mark dose for a future date")
 
         existing = self._get_dose_for_date(medication_id, dose_date)
         if existing is not None:
-            raise ConflictError(f"Dose already recorded for medication {medication_id} on {dose_date}")
+            raise ConflictError(
+                f"Dose already recorded for medication {medication_id} on {dose_date}"
+            )
 
         dose = DoseRecord(
             medication_id=medication_id,
@@ -100,7 +122,7 @@ class DoseService:
             List of dose records sorted by date descending, then timestamp descending
         """
         query = "SELECT * FROM dose_records WHERE medication_id = ?"
-        params = [str(medication_id)]
+        params: list = [str(medication_id)]
 
         if start_date:
             query += " AND date >= ?"

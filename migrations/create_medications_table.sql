@@ -1,5 +1,6 @@
 -- Migration: Create medications table
 -- Description: Defines the schema for tracking prescribed medications
+<<<<<<< HEAD
 -- Created: 2026-09-24
 
 -- Create medications table with all required fields
@@ -63,3 +64,24 @@ COMMENT ON COLUMN medications.end_date IS 'Date when medication treatment ended 
 COMMENT ON COLUMN medications.status IS 'Current status: active or completed';
 COMMENT ON COLUMN medications.created_at IS 'Timestamp when record was created';
 COMMENT ON COLUMN medications.updated_at IS 'Timestamp when record was last updated';
+=======
+
+CREATE TABLE IF NOT EXISTS medications (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    dosage TEXT NOT NULL,
+    frequency TEXT NOT NULL,
+    start_date TEXT,
+    end_date TEXT,
+    status TEXT DEFAULT 'active' NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    CONSTRAINT chk_status CHECK (status IN ('active', 'completed')),
+    CONSTRAINT chk_name_not_empty CHECK (name <> '' AND name IS NOT NULL),
+    CONSTRAINT chk_dosage_not_empty CHECK (dosage <> '' AND dosage IS NOT NULL),
+    CONSTRAINT chk_frequency_not_empty CHECK (frequency <> '' AND frequency IS NOT NULL)
+);
+
+CREATE INDEX IF NOT EXISTS idx_medications_status ON medications(status);
+CREATE INDEX IF NOT EXISTS idx_medications_created_at ON medications(created_at DESC);
+>>>>>>> 9105369 (runctl: build runctl/build-09d3fc65 (pass))
