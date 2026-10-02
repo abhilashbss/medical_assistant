@@ -1,11 +1,11 @@
-"""API endpoint tests via FastAPI TestClient — exercises app.py and lifts coverage."""
+"""API endpoint tests via a stdlib ASGI client — exercises app.py and lifts coverage."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
 
 import pytest
-from fastapi.testclient import TestClient
 
+from tests.asgi_client import ASGIClient
 from prescription_tracker.app import app
 from prescription_tracker.db import seed_reference_data, init_db
 from prescription_tracker.repository import PrescriptionRepository
@@ -24,7 +24,7 @@ def client(monkeypatch):
     conn = init_db()
     monkeypatch.setattr("prescription_tracker.app._conn", conn)
     monkeypatch.setattr("prescription_tracker.app._repo", PrescriptionRepository(conn))
-    return TestClient(app)
+    return ASGIClient(app)
 
 
 def _payload(medicine="ApiMed", **kw):

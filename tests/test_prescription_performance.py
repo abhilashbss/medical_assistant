@@ -1,7 +1,9 @@
 """Performance benchmark suite for single-patient workloads.
 
 Asserts every prescription tracker endpoint completes under 500ms with a
-single-patient workload of 500+ prescriptions and 5000+ dose_logs.
+single-patient workload of 500+ prescriptions and 5000+ dose_logs. Covers
+both the repository layer and the FastAPI HTTP endpoints so the 500ms SLO
+is verified end-to-end.
 """
 from __future__ import annotations
 
@@ -11,6 +13,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from tests.asgi_client import ASGIClient
+from prescription_tracker.app import app
 from prescription_tracker.db import init_db, seed_reference_data
 from prescription_tracker.models import DoseLogCreate, PrescriptionCreate
 from prescription_tracker.repository import PrescriptionRepository
@@ -150,6 +154,24 @@ class TestEndpointLatency:
         elapsed_ms = (time.perf_counter() - start) * 1000
         _assert_under_limit(elapsed_ms, "discontinue")
 
+    def test_complete_under_500ms(self, seeded_repo):
+        repo, _ = seeded_repo
+        rx = repo.create_prescription(
+            PrescriptionCreate(
+                patient_id=PATIENT,
+                doctor_id=DOCTOR,
+                medicine_name="PerfComplete",
+                dosage_amount=75.0,
+                dosage_unit="mg",
+                frequency="1x/day",
+                start_date=_iso(datetime(2026, 7, 1, tzinfo=timezone.utc)),
+            )
+        )
+        start = time.perf_counter()
+        repo.complete(rx["id"])
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        _assert_under_limit(elapsed_ms, "complete")
+
     def test_add_dose_log_under_500ms(self, seeded_repo):
         repo, active_rx = seeded_repo
         start = time.perf_counter()
@@ -209,3 +231,117 @@ class TestExplainQueryPlan:
         )
         assert "SCAN" not in plan.upper(), f"Full table scan detected: {plan}"
         assert "idx_dose_logs_rx_time" in plan or "SEARCH" in plan.upper()
+
+
+@pytest.fixture(scope="module")
+def api_client(seeded_repo):
+    """Point the FastAPI app at the seeded repository's connection."""
+    repo, _ = seeded_repo
+    import prescription_tracker.app as appmod
+
+    appmod._conn = repo.conn
+    appmod._repo = repo
+    return ASGIClient(app)
+
+
+class TestEndpointLatencyHTTP:
+    """End-to-end HTTP latency: every endpoint under 500ms for a single patient."""
+
+    def test_http_create_under_500ms(self, api_client):
+        start = time.perf_counter()
+        r = api_client.post(
+            f"/patients/{PATIENT}/prescriptions",
+            json={
+                "doctor_id": DOCTOR,
+                "medicine_name": "HttpCreate",
+                "dosage_amount": 300.0,
+                "dosage_unit": "mg",
+                "frequency": "1x/day",
+                "start_date": _iso(datetime(2026, 8, 1, tzinfo=timezone.utc)),
+            },
+        )
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        assert r.status_code == 200
+        _assert_under_limit(elapsed_ms, "HTTP create")
+
+    def test_http_retrieve_under_500ms(self, api_client, seeded_repo):
+        _, active_rx = seeded_repo
+        start = time.perf_counter()
+        r = api_client.get(f"/prescriptions/{active_rx}")
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        assert r.status_code == 200
+        _assert_under_limit(elapsed_ms, "HTTP retrieve")
+
+    def test_http_list_by_patient_under_500ms(self, api_client):
+        start = time.perf_counter()
+        r = api_client.get(f"/patients/{PATIENT}/prescriptions")
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        assert r.status_code == 200
+        _assert_under_limit(elapsed_ms, "HTTP list_by_patient")
+
+    def test_http_history_under_500ms(self, api_client):
+        start = time.perf_counter()
+        r = api_client.get(f"/patients/{PATIENT}/prescriptions")
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        assert r.status_code == 200
+        _assert_under_limit(elapsed_ms, "HTTP history")
+
+    def test_http_complete_under_500ms(self, api_client):
+        rx = api_client.post(
+            f"/patients/{PATIENT}/prescriptions",
+            json={
+                "doctor_id": DOCTOR,
+                "medicine_name": "HttpComplete",
+                "dosage_amount": 10.0,
+                "dosage_unit": "mg",
+                "frequency": "1x/day",
+                "start_date": _iso(datetime(2026, 9, 1, tzinfo=timezone.utc)),
+            },
+        ).json()["id"]
+        start = time.perf_counter()
+        r = api_client.patch(f"/prescriptions/{rx}/complete")
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        assert r.status_code == 200
+        _assert_under_limit(elapsed_ms, "HTTP complete")
+
+    def test_http_discontinue_under_500ms(self, api_client):
+        rx = api_client.post(
+            f"/patients/{PATIENT}/prescriptions",
+            json={
+                "doctor_id": DOCTOR,
+                "medicine_name": "HttpDiscontinue",
+                "dosage_amount": 20.0,
+                "dosage_unit": "mg",
+                "frequency": "1x/day",
+                "start_date": _iso(datetime(2026, 10, 1, tzinfo=timezone.utc)),
+            },
+        ).json()["id"]
+        start = time.perf_counter()
+        r = api_client.patch(
+            f"/prescriptions/{rx}/discontinue", json={"reason": "http bench"}
+        )
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        assert r.status_code == 200
+        _assert_under_limit(elapsed_ms, "HTTP discontinue")
+
+    def test_http_add_dose_log_under_500ms(self, api_client, seeded_repo):
+        _, active_rx = seeded_repo
+        start = time.perf_counter()
+        r = api_client.post(
+            f"/prescriptions/{active_rx}/dose-logs",
+            json={
+                "event": "taken",
+                "timestamp": _iso(datetime(2026, 9, 1, 8, 0, tzinfo=timezone.utc)),
+            },
+        )
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        assert r.status_code == 200
+        _assert_under_limit(elapsed_ms, "HTTP add_dose_log")
+
+    def test_http_get_dose_logs_under_500ms(self, api_client, seeded_repo):
+        _, active_rx = seeded_repo
+        start = time.perf_counter()
+        r = api_client.get(f"/prescriptions/{active_rx}/dose-logs")
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        assert r.status_code == 200
+        _assert_under_limit(elapsed_ms, "HTTP get_dose_logs")

@@ -212,7 +212,7 @@ class TestEvidenceCapture:
         import json
         from pathlib import Path
 
-        from fastapi.testclient import TestClient
+        from tests.asgi_client import ASGIClient
 
         from prescription_tracker.app import app
         from prescription_tracker.db import init_db
@@ -221,7 +221,7 @@ class TestEvidenceCapture:
         conn = init_db()
         monkeypatch.setattr("prescription_tracker.app._conn", conn)
         monkeypatch.setattr("prescription_tracker.app._repo", PrescriptionRepository(conn))
-        client = TestClient(app)
+        client = ASGIClient(app)
 
         artifacts = Path(__file__).resolve().parents[2] / ".see" / "e2e-artifacts"
         artifacts.mkdir(parents=True, exist_ok=True)

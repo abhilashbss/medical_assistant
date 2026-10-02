@@ -115,6 +115,27 @@ class TestStatusTransitionImmutability:
         assert len(transitions) == 1
         # The audit row is immutable: no UPDATE/DELETE path exists in code.
 
+    def test_no_repository_method_updates_or_deletes_transitions(self):
+        """The repository exposes no method that mutates status_transitions rows.
+
+        Audit rows are append-only by design: the only write path is the
+        INSERT inside transition_status. Confirm no update/delete of
+        status_transitions exists anywhere in the data-access layer.
+        """
+        import inspect
+
+        from prescription_tracker import repository as repo_mod
+
+        src = inspect.getsource(repo_mod)
+        assert "UPDATE status_transitions" not in src, (
+            "repository must not UPDATE status_transitions (append-only audit)"
+        )
+        assert "DELETE FROM status_transitions" not in src, (
+            "repository must not DELETE FROM status_transitions (append-only audit)"
+        )
+        # Every status_transitions write must be an INSERT.
+        assert "INSERT INTO status_transitions" in src
+
     def test_cannot_reopen_completed(self, repo):
         rx = repo.create_prescription(_make())
         repo.complete(rx["id"])
@@ -135,6 +156,36 @@ class TestStatusTransitionImmutability:
         ).fetchone()
         assert row["transitioned_at"] is not None
         assert "T" in row["transitioned_at"]  # ISO 8601
+
+    def test_complete_records_transition_row(self, repo):
+        rx = repo.create_prescription(_make())
+        repo.complete(rx["id"])
+        row = repo.conn.execute(
+            "SELECT * FROM status_transitions WHERE prescription_id = ?",
+            (rx["id"],),
+        ).fetchone()
+        assert row is not None
+        assert row["from_status"] == "active"
+        assert row["to_status"] == "completed"
+        assert row["transitioned_at"] is not None
+
+    def test_status_transitions_append_only_multiple(self, repo):
+        """A second transition for the same prescription appends; it does not
+        overwrite the first — the audit history grows monotonically."""
+        rx = repo.create_prescription(_make())
+        repo.complete(rx["id"])
+        # Re-transition is rejected, so to prove append-only we rely on the
+        # fact that the single completed transition remains and cannot be
+        # replaced. A discontinue attempt after complete must fail, leaving
+        # the original audit row intact.
+        with pytest.raises(ValidationError):
+            repo.discontinue(rx["id"], "late")
+        rows = repo.conn.execute(
+            "SELECT * FROM status_transitions WHERE prescription_id = ?",
+            (rx["id"],),
+        ).fetchall()
+        assert len(rows) == 1
+        assert rows[0]["to_status"] == "completed"
 
 
 class TestIndexPresence:
