@@ -210,6 +210,15 @@ class TestHistorySortingAndPartitioning:
         statuses = {rx.status for rx in history["historical"]}
         assert PrescriptionStatus.DISCONTINUED in statuses
         assert PrescriptionStatus.COMPLETED in statuses
+        # Both historical entries are present; assert the historical partition
+        # is sorted by start_date descending (the README contract), not just
+        # that both statuses appear. This is the assertion that guards the
+        # sort order across a mixed-status historical set.
+        hist_starts = [datetime.fromisoformat(rx.start_date.isoformat()) for rx in history["historical"]]
+        assert len(hist_starts) == 2
+        assert hist_starts == sorted(hist_starts, reverse=True), (
+            f"historical partition not sorted by start_date DESC: {hist_starts}"
+        )
 
     def test_history_via_api_partitions_active_and_historical(self, client, patient_id, doctor_id):
         first = client.post("/prescriptions", json=_payload(patient_id, doctor_id, medicine_name="MedA",
