@@ -1,6 +1,7 @@
 """Database connection and management."""
 
 import sqlite3
+import threading
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
@@ -20,40 +21,53 @@ class Database:
         else:
             self.db_path = db_path
         self._connection: Optional[sqlite3.Connection] = None
+        # A single shared connection is used across threads (uvicorn dispatches
+        # sync endpoints to a threadpool). sqlite3 permits cross-thread access
+        # with check_same_thread=False, but a shared connection is NOT safe for
+        # concurrent use: interleaved statements/commits from two threads
+        # deadlock. This lock serializes all access so the connection is only
+        # ever used by one thread at a time.
+        self._lock = threading.RLock()
 
     def connect(self) -> sqlite3.Connection:
         """Create and return a database connection."""
-        if self._connection is None:
-            self._connection = sqlite3.connect(self.db_path, check_same_thread=False)
-            self._connection.row_factory = sqlite3.Row
-            # Enable foreign key enforcement
-            self._connection.execute("PRAGMA foreign_keys = ON")
-        return self._connection
+        with self._lock:
+            if self._connection is None:
+                self._connection = sqlite3.connect(self.db_path, check_same_thread=False)
+                self._connection.row_factory = sqlite3.Row
+                # Enable foreign key enforcement
+                self._connection.execute("PRAGMA foreign_keys = ON")
+            return self._connection
 
     def close(self):
         """Close the database connection."""
-        if self._connection:
-            self._connection.close()
-            self._connection = None
+        with self._lock:
+            if self._connection:
+                self._connection.close()
+                self._connection = None
 
     @contextmanager
     def transaction(self):
         """Context manager for a database transaction.
 
-        Commits on success, rolls back on exception.
+        Commits on success, rolls back on exception. Holds the connection lock
+        for the duration so concurrent callers cannot interleave statements
+        within a transaction.
         """
-        conn = self.connect()
-        try:
-            yield conn
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
+        with self._lock:
+            conn = self.connect()
+            try:
+                yield conn
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
 
     def execute(self, query: str, params: tuple = ()) -> sqlite3.Cursor:
         """Execute a SQL query with parameterized params and return the cursor."""
-        conn = self.connect()
-        return conn.execute(query, params)
+        with self._lock:
+            conn = self.connect()
+            return conn.execute(query, params)
 
     def init_schema(self):
         """Initialize the full schema from the migration files."""
