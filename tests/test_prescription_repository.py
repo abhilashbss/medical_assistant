@@ -363,6 +363,17 @@ class TestRepositoryStatusTransitions:
         assert t["reason"] == "adverse reaction"
         assert "T" in t["transitioned_at"]
 
+        # The discontinued row must remain in the patient's history
+        # (immutability — discontinuation is an audit transition, not a
+        # deletion), still retrievable by id with its status preserved.
+        fetched = repo.get_by_id(rx.id)
+        assert fetched is not None
+        assert fetched.status == PrescriptionStatus.DISCONTINUED
+        history = repo.list_by_patient(PATIENT_ID)
+        assert any(p.id == rx.id for p in history), (
+            "discontinued prescription must remain in patient history"
+        )
+
     def test_no_generic_update_method_exposed(self):
         """The repository must not expose an arbitrary column-update path."""
         assert not hasattr(PrescriptionRepository, "update")
