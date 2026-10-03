@@ -502,3 +502,205 @@ class TestEvidenceTranscript:
 
         self._lines.append("")
         self._lines.append("# end of transcript")
+
+
+# ----------------------------------------------------------------------
+# Dose adherence logging and history (lifecycle API scope)
+# ----------------------------------------------------------------------
+class TestDoseLogging:
+    def test_log_dose_returns_201_and_is_retrievable(self, client, patient_id, doctor_id):
+        created = client.post("/prescriptions", json=_payload(patient_id, doctor_id))
+        rx_id = created.get_json()["id"]
+
+        dose = client.post(
+            f"/prescriptions/{rx_id}/doses",
+            json={"taken_at": "2026-01-01T09:00:00+00:00", "status": "taken"},
+        )
+        assert dose.status_code == 201
+        body = dose.get_json()
+        assert body["status"] == "taken"
+        assert body["prescription_id"] == rx_id
+
+        logs = client.get(f"/prescriptions/{rx_id}/doses")
+        assert logs.status_code == 200
+        assert len(logs.get_json()) == 1
+
+    def test_log_dose_defaults_taken_at_and_status(self, client, patient_id, doctor_id):
+        created = client.post("/prescriptions", json=_payload(patient_id, doctor_id))
+        rx_id = created.get_json()["id"]
+
+        dose = client.post(f"/prescriptions/{rx_id}/doses", json={})
+        assert dose.status_code == 201
+        body = dose.get_json()
+        assert body["status"] == "taken"
+        assert body["taken_at"] is not None
+
+    def test_log_dose_ordered_by_taken_at_ascending(self, client, patient_id, doctor_id):
+        created = client.post("/prescriptions", json=_payload(patient_id, doctor_id))
+        rx_id = created.get_json()["id"]
+
+        client.post(f"/prescriptions/{rx_id}/doses",
+                    json={"taken_at": "2026-01-03T09:00:00+00:00", "status": "taken"})
+        client.post(f"/prescriptions/{rx_id}/doses",
+                    json={"taken_at": "2026-01-01T09:00:00+00:00", "status": "taken"})
+        client.post(f"/prescriptions/{rx_id}/doses",
+                    json={"taken_at": "2026-01-02T09:00:00+00:00", "status": "skipped"})
+
+        logs = client.get(f"/prescriptions/{rx_id}/doses").get_json()
+        times = [datetime.fromisoformat(l["taken_at"]) for l in logs]
+        assert times == sorted(times)
+        assert [l["status"] for l in logs] == ["taken", "skipped", "taken"]
+
+    def test_log_dose_unknown_prescription_returns_404(self, client):
+        resp = client.post(f"/prescriptions/{uuid4()}/doses",
+                           json={"taken_at": "2026-01-01T09:00:00+00:00"})
+        assert resp.status_code == 404
+
+    def test_log_dose_invalid_status_returns_400(self, client, patient_id, doctor_id):
+        created = client.post("/prescriptions", json=_payload(patient_id, doctor_id))
+        rx_id = created.get_json()["id"]
+
+        resp = client.post(f"/prescriptions/{rx_id}/doses",
+                           json={"taken_at": "2026-01-01T09:00:00+00:00", "status": "bogus"})
+        assert resp.status_code == 400
+
+    def test_log_dose_naive_timestamp_rejected(self, client, patient_id, doctor_id):
+        created = client.post("/prescriptions", json=_payload(patient_id, doctor_id))
+        rx_id = created.get_json()["id"]
+
+        resp = client.post(f"/prescriptions/{rx_id}/doses",
+                           json={"taken_at": "2026-01-01T09:00:00"})
+        assert resp.status_code == 400
+
+
+# ----------------------------------------------------------------------
+# Transitions audit endpoint
+# ----------------------------------------------------------------------
+class TestTransitionsEndpoint:
+    def test_transitions_returns_audit_trail(self, client, patient_id, doctor_id):
+        created = client.post("/prescriptions", json=_payload(patient_id, doctor_id))
+        rx_id = created.get_json()["id"]
+        client.patch(f"/prescriptions/{rx_id}/discontinue",
+                     json={"reason": "Side effects"})
+
+        resp = client.get(f"/prescriptions/{rx_id}/transitions")
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert len(body) == 1
+        assert body[0]["to_status"] == "discontinued"
+        assert body[0]["reason"] == "Side effects"
+
+    def test_transitions_empty_for_fresh_prescription(self, client, patient_id, doctor_id):
+        created = client.post("/prescriptions", json=_payload(patient_id, doctor_id))
+        rx_id = created.get_json()["id"]
+
+        resp = client.get(f"/prescriptions/{rx_id}/transitions")
+        assert resp.status_code == 200
+        assert resp.get_json() == []
+
+
+# ----------------------------------------------------------------------
+# Invalid path-parameter handling (covers _parse_uuid guard branches)
+# ----------------------------------------------------------------------
+class TestInvalidUuidPaths:
+    def test_get_invalid_uuid_returns_400(self, client):
+        assert client.get("/prescriptions/not-a-uuid").status_code == 400
+
+    def test_history_invalid_patient_uuid_returns_400(self, client):
+        assert client.get("/patients/not-a-uuid/prescriptions").status_code == 400
+
+    def test_complete_invalid_uuid_returns_400(self, client):
+        assert client.patch("/prescriptions/not-a-uuid/complete").status_code == 400
+
+    def test_discontinue_invalid_uuid_returns_400(self, client):
+        assert client.patch("/prescriptions/not-a-uuid/discontinue",
+                            json={"reason": "x"}).status_code == 400
+
+    def test_doses_invalid_uuid_returns_400(self, client):
+        assert client.post("/prescriptions/not-a-uuid/doses").status_code == 400
+        assert client.get("/prescriptions/not-a-uuid/doses").status_code == 400
+
+    def test_transitions_invalid_uuid_returns_400(self, client):
+        assert client.get("/prescriptions/not-a-uuid/transitions").status_code == 400
+
+    def test_complete_unknown_prescription_returns_404(self, client):
+        assert client.patch(f"/prescriptions/{uuid4()}/complete").status_code == 404
+
+    def test_discontinue_unknown_prescription_returns_404(self, client):
+        resp = client.patch(f"/prescriptions/{uuid4()}/discontinue",
+                            json={"reason": "x"})
+        assert resp.status_code == 404
+
+    def test_create_empty_json_body_returns_400(self, client):
+        resp = client.post("/prescriptions", data="",
+                           content_type="application/json")
+        assert resp.status_code == 400
+
+    def test_recomplete_via_api_returns_400(self, client, patient_id, doctor_id):
+        created = client.post("/prescriptions", json=_payload(patient_id, doctor_id))
+        rx_id = created.get_json()["id"]
+        assert client.patch(f"/prescriptions/{rx_id}/complete").status_code == 200
+        assert client.patch(f"/prescriptions/{rx_id}/complete").status_code == 400
+
+
+# ----------------------------------------------------------------------
+# Repository / model branches exercised via the service layer
+# ----------------------------------------------------------------------
+class TestRepositoryAndModelBranches:
+    def test_get_by_id_missing_returns_none(self, service):
+        assert service.get_prescription(uuid4()) is None
+
+    def test_dose_logs_empty_for_new_prescription(self, service, patient_id, doctor_id):
+        from prescription_tracker.models import DoseLog
+        rx = service.create_prescription(Prescription(
+            patient_id=patient_id, doctor_id=doctor_id, medicine_name="MedA",
+            dosage_amount="100", dosage_unit="mg", frequency="daily",
+            start_date="2026-01-01T08:00:00+00:00",
+        ))
+        assert service.get_dose_logs(rx.id) == []
+
+        dose = DoseLog(
+            prescription_id=rx.id,
+            taken_at="2026-01-01T09:00:00+00:00",
+            status="taken",
+        )
+        service.log_dose(dose)
+        logs = service.get_dose_logs(rx.id)
+        assert len(logs) == 1
+        assert logs[0].status.value == "taken"
+
+    def test_non_unique_integrity_error_propagates_as_non_conflict(self, service, patient_id, doctor_id):
+        """A non-unique-constraint IntegrityError (e.g. FK failure) must not be
+        misclassified as a ConflictError."""
+        import sqlite3
+        rx = Prescription(
+            patient_id=patient_id, doctor_id=doctor_id, medicine_name="MedA",
+            dosage_amount="100", dosage_unit="mg", frequency="daily",
+            start_date="2026-01-01T08:00:00+00:00",
+        )
+        # Corrupt by deleting the patient row after create to force a non-unique
+        # IntegrityError on a subsequent create path is hard; instead directly
+        # exercise the service guard by forcing a generic IntegrityError.
+        original = service.repository.create
+
+        def _raise_generic(prescription):
+            raise sqlite3.IntegrityError("foreign key constraint failed")
+
+        service.repository.create = _raise_generic
+        try:
+            with pytest.raises(sqlite3.IntegrityError):
+                service.create_prescription(rx)
+        finally:
+            service.repository.create = original
+
+    def test_prescription_to_dict_roundtrip_includes_all_fields(self, patient_id, doctor_id):
+        rx = Prescription(
+            patient_id=patient_id, doctor_id=doctor_id, medicine_name="MedA",
+            dosage_amount="100", dosage_unit="mg", frequency="daily",
+            start_date="2026-01-01T08:00:00+00:00",
+            end_date="2026-02-01T08:00:00+00:00",
+        )
+        d = rx.to_dict()
+        assert d["medicine_name"] == "MedA"
+        assert d["end_date"] == "2026-02-01T08:00:00+00:00"
+        assert d["status"] == "active"
