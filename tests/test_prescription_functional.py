@@ -221,6 +221,17 @@ def test_second_active_after_discontinuation_succeeds(client):
     assert r2.status_code == 201, r2.text
     history = client.get(f"/patients/{pid}/prescriptions").json()
     assert len(history) == 2
+    # The discontinued row must still be present in history with its status
+    # preserved (immutability — discontinuation is an audit transition, not a
+    # deletion), and history stays sorted by start_date descending.
+    by_id = {h["id"]: h for h in history}
+    assert rx_id in by_id, "discontinued prescription must remain in history"
+    assert by_id[rx_id]["status"] == "discontinued"
+    assert by_id[rx_id]["discontinue_reason"] == "Adverse reaction"
+    starts = [h["start_date"] for h in history]
+    assert starts == sorted(starts, reverse=True), (
+        f"history not sorted by start_date DESC after discontinue: {starts}"
+    )
 
 
 # --------------------------------------------------------------------------- #
