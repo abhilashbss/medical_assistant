@@ -119,10 +119,13 @@ class Database:
                 CREATE TABLE IF NOT EXISTS dose_logs (
                     id TEXT PRIMARY KEY,
                     prescription_id TEXT NOT NULL,
-                    taken_at TEXT NOT NULL,
-                    status TEXT,
-                    FOREIGN KEY (prescription_id) REFERENCES prescriptions(id) ON DELETE CASCADE,
-                    CONSTRAINT chk_dose_status CHECK (status IN ('taken', 'skipped', 'missed'))
+                    event TEXT NOT NULL CHECK (event IN ('taken', 'skipped', 'missed')),
+                    logged_at TEXT,
+                    timestamp TEXT,
+                    taken_at TEXT,
+                    notes TEXT,
+                    status TEXT CHECK (status IS NULL OR status IN ('taken', 'skipped', 'missed')),
+                    FOREIGN KEY (prescription_id) REFERENCES prescriptions(id) ON DELETE CASCADE
                 )
                 """
             )
@@ -156,8 +159,13 @@ class Database:
             )
 
             conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_dose_logs_rx_taken "
-                "ON dose_logs(prescription_id, taken_at)"
+                "CREATE INDEX IF NOT EXISTS idx_dose_logs_rx_time "
+                "ON dose_logs(prescription_id, timestamp)"
+            )
+
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_dose_logs_rx_logged "
+                "ON dose_logs(prescription_id, logged_at)"
             )
 
 
