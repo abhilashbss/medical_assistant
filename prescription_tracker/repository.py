@@ -244,3 +244,32 @@ class PrescriptionRepository:
         """Return EXPLAIN QUERY PLAN rows for a query."""
         rows = self.conn.execute("EXPLAIN QUERY PLAN " + sql, params).fetchall()
         return [dict(r) for r in rows]
+
+    def _plan_detail(self, sql: str, params: tuple = ()) -> str:
+        """Concatenate EXPLAIN QUERY PLAN detail lines into one string."""
+        return " ".join(r["detail"] for r in self.explain_query_plan(sql, params))
+
+    def plan_history_by_patient(self, patient_id: str) -> str:
+        """Query plan for patient history ordered by start_date DESC."""
+        return self._plan_detail(
+            "SELECT * FROM prescriptions WHERE patient_id = ? ORDER BY start_date DESC",
+            (patient_id,),
+        )
+
+    def plan_by_patient_and_status(self, patient_id: str, status: str) -> str:
+        """Query plan for filtering by patient_id and status."""
+        return self._plan_detail(
+            "SELECT * FROM prescriptions WHERE patient_id = ? AND status = ?",
+            (patient_id, status),
+        )
+
+    def plan_dose_logs(self, prescription_id: str) -> str:
+        """Query plan for dose logs ordered by timestamp ascending."""
+        return self._plan_detail(
+            "SELECT * FROM dose_logs WHERE prescription_id = ? ORDER BY timestamp ASC",
+            (prescription_id,),
+        )
+
+    def uses_full_scan(self, plan: str) -> bool:
+        """True if the plan text indicates a full-table scan."""
+        return "SCAN" in plan.upper() and "USING INDEX" not in plan.upper()

@@ -244,3 +244,101 @@ class TestExplainQueryPlan:
         )
         assert "SCAN" not in plan.upper(), f"Full scan: {plan}"
         assert "idx_prescriptions_patient_status" in plan
+
+
+class TestQueryPlanInstrumentation:
+    """Exercise the repository's named query-plan helpers and full-scan detector."""
+
+    def test_plan_history_by_patient_uses_index(self, repo):
+        rx = repo.create_prescription(_make(medicine="PlanHist"))
+        plan = repo.plan_history_by_patient(PATIENT)
+        assert "idx_prescriptions_patient_startdate" in plan
+        assert not repo.uses_full_scan(plan)
+
+    def test_plan_by_patient_and_status_uses_index(self, repo):
+        repo.create_prescription(_make(medicine="PlanStatus"))
+        plan = repo.plan_by_patient_and_status(PATIENT, "active")
+        assert "idx_prescriptions_patient_status" in plan
+        assert not repo.uses_full_scan(plan)
+
+    def test_plan_dose_logs_uses_index(self, repo):
+        from prescription_tracker.models import DoseLogCreate
+        rx = repo.create_prescription(_make(medicine="PlanDose"))
+        repo.add_dose_log(
+            DoseLogCreate(
+                prescription_id=rx["id"],
+                event="taken",
+                timestamp=_iso(datetime(2026, 1, 1, 8, 0, tzinfo=timezone.utc)),
+            )
+        )
+        plan = repo.plan_dose_logs(rx["id"])
+        assert "idx_dose_logs_rx_time" in plan
+        assert not repo.uses_full_scan(plan)
+
+    def test_uses_full_scan_detects_scan(self, repo):
+        assert repo.uses_full_scan("SCAN TABLE prescriptions") is True
+        assert repo.uses_full_scan("SEARCH prescriptions USING INDEX foo") is False
+
+
+class TestRepositoryEdgeCases:
+    """Cover NotFoundError paths, invalid transitions, and dose-log date filters."""
+
+    def test_get_prescription_not_found(self, repo):
+        from prescription_tracker.repository import NotFoundError
+        with pytest.raises(NotFoundError):
+            repo.get_prescription("nonexistent-id")
+
+    def test_transition_not_found(self, repo):
+        from prescription_tracker.models import StatusTransition
+        from prescription_tracker.repository import NotFoundError
+        with pytest.raises(NotFoundError):
+            repo.transition_status(
+                "nonexistent-id", StatusTransition(to_status="completed")
+            )
+
+    def test_transition_same_status_rejected(self, repo):
+        """Transitioning to the same status is rejected (no-op guard)."""
+        rx = repo.create_prescription(_make(medicine="SameStatus"))
+        with pytest.raises(ValidationError) as exc:
+            repo.transition_status(
+                rx["id"],
+                __import__("prescription_tracker.models", fromlist=["StatusTransition"]).StatusTransition(
+                    to_status="active"
+                ),
+            )
+        # 'active' is not a valid to_status in the model; verify the
+        # repository-level same-status guard by completing then completing again.
+        repo.complete(rx["id"])
+        with pytest.raises(ValidationError):
+            repo.transition_status(
+                rx["id"],
+                __import__("prescription_tracker.models", fromlist=["StatusTransition"]).StatusTransition(
+                    to_status="completed"
+                ),
+            )
+
+    def test_transition_from_non_active_rejected(self, repo):
+        rx = repo.create_prescription(_make(medicine="NonActive"))
+        repo.complete(rx["id"])
+        with pytest.raises(ValidationError):
+            repo.discontinue(rx["id"], "too late")
+
+    def test_dose_log_filters_by_date_range(self, repo):
+        from prescription_tracker.models import DoseLogCreate
+        rx = repo.create_prescription(_make(medicine="DoseFilter"))
+        t1 = _iso(datetime(2026, 1, 1, 8, 0, tzinfo=timezone.utc))
+        t2 = _iso(datetime(2026, 1, 1, 14, 0, tzinfo=timezone.utc))
+        t3 = _iso(datetime(2026, 1, 1, 20, 0, tzinfo=timezone.utc))
+        for ts in (t1, t2, t3):
+            repo.add_dose_log(
+                DoseLogCreate(prescription_id=rx["id"], event="taken", timestamp=ts)
+            )
+        # Both start and end filter.
+        both = repo.get_dose_logs(rx["id"], start_ts=t2, end_ts=t2)
+        assert len(both) == 1
+        # start-only filter.
+        start_only = repo.get_dose_logs(rx["id"], start_ts=t2)
+        assert len(start_only) == 2
+        # end-only filter.
+        end_only = repo.get_dose_logs(rx["id"], end_ts=t2)
+        assert len(end_only) == 2
