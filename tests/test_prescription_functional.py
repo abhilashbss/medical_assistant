@@ -779,3 +779,47 @@ class TestPerformance:
         elapsed_ms = (time.perf_counter() - start) * 1000
         assert elapsed_ms < 500, f"operations took {elapsed_ms:.1f}ms"
         _log(f"[perf] create+get+list+complete+list_dose_logs -> {elapsed_ms:.2f}ms (< 500ms)")
+
+
+# --------------------------------------------------------------------------
+# HTTP persistence without MEDICATION_TRACKER_DB (the live-E2E configuration)
+# --------------------------------------------------------------------------
+# Every other HTTP test sets MEDICATION_TRACKER_DB via the ``client`` fixture.
+# The feature-level E2E drives the app the way a user does — no such env var
+# set — which used to fall through to db.connect(None) -> an ephemeral
+# :memory: database opened per request. Each request got a fresh empty db, so
+# create returned 201 but a separate retrieve came back 404 and history came
+# back empty. This pins the on-disk fallback so that regression cannot return.
+
+def test_http_persists_across_requests_without_env_var(tmp_path, monkeypatch):
+    if TestClient is None:
+        pytest.skip(f"FastAPI TestClient unavailable: {_TESTCLIENT_IMPORT_ERROR}")
+    monkeypatch.delenv("MEDICATION_TRACKER_DB", raising=False)
+    # Redirect the package's default on-disk location into tmp_path so the
+    # test does not write a real db file into the installed package dir.
+    # Patch on the app module because app.py imports `database_file` by name.
+    import medication_tracker.app as appmod
+
+    monkeypatch.setattr(appmod, "database_file", lambda: tmp_path / "default.db")
+
+    from medication_tracker.app import create_app
+
+    with TestClient(create_app()) as c:
+        pid = str(uuid.uuid4())
+        r = c.post(
+            f"/patients/{pid}/prescriptions",
+            json=_valid_payload(medicine_name="Amoxicillin"),
+        )
+        assert r.status_code == 201, r.text
+        rx_id = r.json()["id"]
+
+        # A *separate* request must see the row created above. This is the
+        # assertion that fails (404 / empty history) when each request gets
+        # its own :memory: db.
+        r2 = c.get(f"/prescriptions/{rx_id}")
+        assert r2.status_code == 200, r2.text
+        assert r2.json()["id"] == rx_id
+
+        history = c.get(f"/patients/{pid}/prescriptions").json()
+        assert len(history) == 1
+        assert history[0]["id"] == rx_id

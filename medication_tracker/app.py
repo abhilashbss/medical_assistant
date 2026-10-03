@@ -24,7 +24,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from .db import connect
+from .db import connect, database_file
 from .migrations.runner import run_migrations
 from . import repository as repo
 
@@ -45,7 +45,14 @@ class DiscontinueBody(BaseModel):
 
 
 def _db_path() -> Optional[str]:
-    return os.environ.get("MEDICATION_TRACKER_DB")
+    env = os.environ.get("MEDICATION_TRACKER_DB")
+    if env:
+        return env
+    # Fall back to a stable on-disk file. Returning None would make
+    # db.connect open an ephemeral :memory: database per request, so no
+    # row would ever survive to the next call — create would succeed but
+    # retrieve/history would always come back empty.
+    return str(database_file())
 
 
 def _conn() -> sqlite3.Connection:
