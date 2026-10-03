@@ -58,4 +58,4 @@ class PrescriptionService:
         return self.repository.log_dose(dose)
 
     def get_dose_logs(self, prescription_id: UUID) -> List[DoseLog]:
-        return self.repository.get_dose_logs(prescription_id)
+        return self.repository.get_dose_logs_model(prescription_id)
