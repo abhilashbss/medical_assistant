@@ -79,88 +79,24 @@ def _now_iso() -> str:
 # --------------------------------------------------------------------------- #
 # Schema bootstrap (class-based repository path)
 # --------------------------------------------------------------------------- #
-
-_SCHEMA_PATH_SQL = None  # set by tests via init_schema; otherwise migrations file used
+# The schema itself is owned by the schema-foundation unit and lives in
+# ``migrations/0001_init.sql``, applied by the migration runner in
+# :mod:`medication_tracker.migrations.runner`. ``init_schema`` is the seam the
+# repository/tests use to bring up a fresh database; it delegates to the real
+# runner rather than carrying its own schema definition.
 
 
 def init_schema(conn: sqlite3.Connection) -> None:
-    """Create the prescription-tracker schema on ``conn``.
+    """Apply the prescription-tracker schema to ``conn``.
 
     Idempotent — safe to call on a fresh or existing database. Used by the
-    repository and by tests to set up an in-memory database.
+    repository and by tests to set up an in-memory database. Delegates to the
+    schema-foundation migration runner so there is a single source of truth
+    for the DDL.
     """
-    conn.executescript(
-        """
-        PRAGMA foreign_keys = ON;
+    from medication_tracker.migrations.runner import run_migrations
 
-        CREATE TABLE IF NOT EXISTS patients (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS doctors (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS prescriptions (
-            id TEXT PRIMARY KEY,
-            patient_id TEXT NOT NULL,
-            doctor_id TEXT NOT NULL,
-            medicine_name TEXT NOT NULL CHECK (medicine_name <> ''),
-            dosage_amount REAL NOT NULL CHECK (dosage_amount > 0),
-            dosage_unit TEXT NOT NULL CHECK (dosage_unit <> ''),
-            frequency TEXT NOT NULL CHECK (frequency <> ''),
-            start_date TEXT NOT NULL,
-            end_date TEXT,
-            status TEXT NOT NULL DEFAULT 'active'
-                CHECK (status IN ('active', 'completed', 'discontinued')),
-            created_at TEXT NOT NULL,
-            FOREIGN KEY (patient_id) REFERENCES patients(id) ON DELETE RESTRICT,
-            FOREIGN KEY (doctor_id) REFERENCES doctors(id) ON DELETE RESTRICT,
-            CHECK (end_date IS NULL OR end_date > start_date)
-        );
-
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_rx_active_unique
-            ON prescriptions(patient_id, medicine_name)
-            WHERE status = 'active';
-
-        CREATE INDEX IF NOT EXISTS idx_rx_patient_status
-            ON prescriptions(patient_id, status);
-
-        CREATE INDEX IF NOT EXISTS idx_rx_patient_start
-            ON prescriptions(patient_id, start_date DESC);
-
-        CREATE TABLE IF NOT EXISTS status_transitions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            prescription_id TEXT NOT NULL,
-            from_status TEXT NOT NULL
-                CHECK (from_status IN ('active', 'completed', 'discontinued')),
-            to_status TEXT NOT NULL
-                CHECK (to_status IN ('active', 'completed', 'discontinued')),
-            reason TEXT,
-            transitioned_at TEXT NOT NULL,
-            FOREIGN KEY (prescription_id) REFERENCES prescriptions(id) ON DELETE RESTRICT
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_transitions_rx
-            ON status_transitions(prescription_id, transitioned_at);
-
-        CREATE TABLE IF NOT EXISTS dose_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            prescription_id TEXT NOT NULL,
-            event TEXT NOT NULL CHECK (event IN ('taken', 'skipped')),
-            logged_at TEXT NOT NULL,
-            FOREIGN KEY (prescription_id) REFERENCES prescriptions(id) ON DELETE RESTRICT
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_dose_logs_rx_time
-            ON dose_logs(prescription_id, logged_at);
-        """
-    )
-    conn.commit()
+    run_migrations(conn)
 
 
 # --------------------------------------------------------------------------- #
@@ -374,9 +310,10 @@ class PrescriptionRepository:
             """
             INSERT INTO prescriptions
                 (id, patient_id, doctor_id, medicine_name, dosage_amount,
-                 dosage_unit, frequency, start_date, end_date, status, created_at)
+                 dosage_unit, frequency, start_date, end_date, status,
+                 discontinue_reason, created_at, updated_at)
             VALUES
-                (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
             """,
             (
                 prescription.id,
@@ -392,16 +329,17 @@ class PrescriptionRepository:
                 if isinstance(prescription.status, PrescriptionStatus)
                 else prescription.status,
                 prescription.created_at,
+                prescription.created_at,
             ),
         )
         self.conn.commit()
         return prescription
 
-    def add_patient(self, patient_id: str, name: str = "Patient") -> None:
+    def add_patient(self, patient_id: str) -> None:
         """Insert a patient reference row (for FK satisfaction in tests/usage)."""
         self.conn.execute(
-            "INSERT OR IGNORE INTO patients (id, name, created_at) VALUES (?, ?, ?)",
-            (patient_id, name, _now_iso()),
+            "INSERT OR IGNORE INTO patients (id, created_at) VALUES (?, ?)",
+            (patient_id, _now_iso()),
         )
         self.conn.commit()
 
@@ -444,10 +382,11 @@ class PrescriptionRepository:
         self.conn.execute(
             """
             INSERT INTO status_transitions
-                (prescription_id, from_status, to_status, reason, transitioned_at)
-            VALUES (?, ?, ?, ?, ?)
+                (id, prescription_id, from_status, to_status, reason, transitioned_at)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
             (
+                str(uuid.uuid4()),
                 prescription_id,
                 from_status.value,
                 to_status.value,
@@ -472,8 +411,8 @@ class PrescriptionRepository:
                 f"cannot complete a prescription that is {rx.status.value} (only active can transition)"
             )
         self.conn.execute(
-            "UPDATE prescriptions SET status = ? WHERE id = ?",
-            (PrescriptionStatus.COMPLETED.value, prescription_id),
+            "UPDATE prescriptions SET status = ?, updated_at = ? WHERE id = ?",
+            (PrescriptionStatus.COMPLETED.value, _now_iso(), prescription_id),
         )
         self._record_transition(prescription_id, rx.status, PrescriptionStatus.COMPLETED, None)
         self.conn.commit()
@@ -496,8 +435,9 @@ class PrescriptionRepository:
                 f"cannot discontinue a prescription that is {rx.status.value} (only active can transition)"
             )
         self.conn.execute(
-            "UPDATE prescriptions SET status = ? WHERE id = ?",
-            (PrescriptionStatus.DISCONTINUED.value, prescription_id),
+            "UPDATE prescriptions SET status = ?, discontinue_reason = ?, updated_at = ? "
+            "WHERE id = ?",
+            (PrescriptionStatus.DISCONTINUED.value, reason, _now_iso(), prescription_id),
         )
         self._record_transition(prescription_id, rx.status, PrescriptionStatus.DISCONTINUED, reason)
         self.conn.commit()
@@ -543,8 +483,8 @@ class PrescriptionRepository:
         if rx.status != PrescriptionStatus.ACTIVE:
             raise ValueError(f"cannot log doses against a {rx.status.value} prescription")
         self.conn.execute(
-            "INSERT INTO dose_logs (prescription_id, event, logged_at) VALUES (?, ?, ?)",
-            (prescription_id, event, logged_at),
+            "INSERT INTO dose_logs (id, prescription_id, event, logged_at) VALUES (?, ?, ?, ?)",
+            (str(uuid.uuid4()), prescription_id, event, logged_at),
         )
         self.conn.commit()
         row = self.conn.execute(

@@ -17,7 +17,7 @@ lifecycle, and dose-adherence history, backed by SQLite.
   retrieves prescriptions via parameterized SQL (`?` binding only). No generic
   update method is exposed.
 - `medication_tracker/errors.py` — `ValidationError` exception.
-- `migrations/001_schema.sql` — schema: `patients`, `doctors`, `prescriptions`,
+- `migrations/0001_init.sql` — schema: `patients`, `doctors`, `prescriptions`,
   `status_transitions`, `dose_logs`, with FK references, CHECK constraints, a
   partial unique index on active prescriptions, and supporting indexes.
 
@@ -62,7 +62,7 @@ The only permitted mutations are:
 
 Both transition methods append a timestamped row to `status_transitions`
 (`from_status`, `to_status`, `reason`, `transitioned_at`), and the partial
-unique index `idx_rx_active_unique` moves with the row so that a completed or
+unique index `one_active_per_medicine` moves with the row so that a completed or
 discontinued prescription no longer blocks a new active prescription for the
 same medicine and patient.
 

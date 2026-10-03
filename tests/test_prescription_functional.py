@@ -34,7 +34,19 @@ from pathlib import Path
 from typing import Iterator, List
 
 import pytest
-from fastapi.testclient import TestClient
+
+# The FastAPI TestClient is an optional dependency: it backs the HTTP API
+# tests (which belong to a separate build unit). Importing it eagerly at
+# module scope would crash collection when ``httpx`` is absent and take the
+# repository-layer tests down with it, so it is imported lazily inside the
+# ``client`` fixture. The HTTP tests skip cleanly when it is unavailable;
+# the repository-layer tests (this unit) always run.
+_TESTCLIENT_IMPORT_ERROR: Exception | None = None
+try:  # pragma: no cover - exercised only in environments with httpx
+    from fastapi.testclient import TestClient  # type: ignore[import-not-found]
+except Exception as exc:  # pragma: no cover
+    _TESTCLIENT_IMPORT_ERROR = exc
+    TestClient = None  # type: ignore[assignment,misc]
 
 from medication_tracker.errors import ValidationError
 from medication_tracker.models import PrescriptionStatus
@@ -77,7 +89,12 @@ def db_path(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def client(db_path: Path, monkeypatch) -> Iterator[TestClient]:
+def client(db_path: Path, monkeypatch):
+    # The FastAPI TestClient (and its httpx dependency) belongs to the HTTP
+    # build unit; skip the HTTP tests when it is unavailable rather than
+    # crashing collection. Repository-layer tests do not use this fixture.
+    if TestClient is None:
+        pytest.skip(f"FastAPI TestClient unavailable: {_TESTCLIENT_IMPORT_ERROR}")
     # Import after the env var has been set so the app picks up the per-test db.
     monkeypatch.setenv("MEDICATION_TRACKER_DB", str(db_path))
     from medication_tracker.app import create_app
