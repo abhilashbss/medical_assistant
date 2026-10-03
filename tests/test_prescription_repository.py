@@ -10,12 +10,24 @@ Covers the build-unit #1 Definition of Done:
 
 import sqlite3
 import time
+import uuid
 
 import pytest
 
 from medication_tracker.errors import ValidationError
 from medication_tracker.models import Prescription, PrescriptionStatus
-from medication_tracker.repository import PrescriptionRepository, init_schema
+from medication_tracker.repository import (
+    PrescriptionRepository,
+    ValidationError as RepoValidationError,
+    complete_prescription,
+    create_prescription,
+    discontinue_prescription,
+    ensure_doctor,
+    ensure_patient,
+    get_prescription,
+    init_schema,
+    list_by_patient,
+)
 from medication_tracker.validators import validate_prescription
 
 PATIENT_ID = "11111111-1111-1111-1111-111111111111"
@@ -443,3 +455,240 @@ class TestRepositoryPerformance:
         repo.list_by_patient(PATIENT_ID)
         elapsed_ms = (time.perf_counter() - start) * 1000
         assert elapsed_ms < 500, f"operation took {elapsed_ms:.1f}ms"
+
+
+# --------------------------------------------------------------------------
+# Repository class: remaining branches (not-found, non-active transitions,
+# convenience wrapper, dose logging)
+# --------------------------------------------------------------------------
+
+class TestRepositoryBranches:
+    def test_complete_missing_returns_none(self, repo):
+        assert repo.complete("no-such-id") is None
+
+    def test_discontinue_missing_returns_none(self, repo):
+        assert repo.discontinue("no-such-id", "reason") is None
+
+    def test_discontinue_non_string_reason_rejected(self, repo):
+        rx = validate_prescription(valid_data())
+        repo.create(rx)
+        with pytest.raises(ValueError):
+            repo.discontinue(rx.id, 123)  # type: ignore[arg-type]
+
+    def test_discontinue_non_active_rejected(self, repo):
+        rx = validate_prescription(valid_data())
+        repo.create(rx)
+        repo.complete(rx.id)
+        with pytest.raises(ValueError):
+            repo.discontinue(rx.id, "late reason")
+
+    def test_create_prescription_convenience_wrapper_round_trips(self, repo):
+        rx = repo.create_prescription(valid_data(medicine_name="WrapperDrug"))
+        assert rx.id is not None
+        got = repo.get_by_id(rx.id)
+        assert got is not None
+        assert got.medicine_name == "WrapperDrug"
+
+    def test_log_dose_round_trips_and_list_orders_ascending(self, repo):
+        rx = repo.create_prescription(valid_data(medicine_name="DoseDrug"))
+        repo.log_dose(rx.id, "taken", "2026-01-01T08:00:00+00:00")
+        repo.log_dose(rx.id, "skipped", "2026-01-01T20:00:00+00:00")
+        logs = repo.list_dose_logs(rx.id)
+        assert len(logs) == 2
+        assert logs[0]["event"] == "taken"
+        assert logs[1]["event"] == "skipped"
+        assert logs[0]["logged_at"] <= logs[1]["logged_at"]
+
+    def test_log_dose_unknown_event_rejected(self, repo):
+        rx = repo.create_prescription(valid_data())
+        with pytest.raises(ValueError):
+            repo.log_dose(rx.id, "maybe", "2026-01-01T08:00:00+00:00")
+
+    def test_log_dose_missing_prescription_rejected(self, repo):
+        with pytest.raises(ValueError):
+            repo.log_dose("no-such-id", "taken", "2026-01-01T08:00:00+00:00")
+
+    def test_log_dose_completed_prescription_rejected(self, repo):
+        rx = repo.create_prescription(valid_data())
+        repo.complete(rx.id)
+        with pytest.raises(ValueError):
+            repo.log_dose(rx.id, "taken", "2026-01-01T08:00:00+00:00")
+
+    def test_list_dose_logs_empty(self, repo):
+        rx = repo.create_prescription(valid_data())
+        assert repo.list_dose_logs(rx.id) == []
+
+
+# --------------------------------------------------------------------------
+# Free-function data-access API path (module-level functions over dicts).
+# These exercise the parameterized INSERT/SELECT/UPDATE SQL the
+# data-access layer exposes to the HTTP layer.
+# --------------------------------------------------------------------------
+
+@pytest.fixture
+def conn():
+    c = sqlite3.connect(":memory:")
+    c.row_factory = sqlite3.Row
+    c.execute("PRAGMA foreign_keys = ON;")
+    init_schema(c)
+    ensure_patient(c, PATIENT_ID)
+    ensure_doctor(c, DOCTOR_ID)
+    return c
+
+
+def _valid_create_payload(**overrides):
+    base = {
+        "patient_id": PATIENT_ID,
+        "doctor_id": DOCTOR_ID,
+        "medicine_name": "Amoxicillin",
+        "dosage_amount": 500,
+        "dosage_unit": "mg",
+        "frequency": "twice daily",
+        "start_date": "2026-01-01T08:00:00+00:00",
+    }
+    base.update(overrides)
+    return base
+
+
+class TestFreeFunctionCreateGetList:
+    def test_create_persists_and_get_round_trips(self, conn):
+        row = create_prescription(conn, _valid_create_payload())
+        assert row["medicine_name"] == "Amoxicillin"
+        assert row["dosage_amount"] == 500.0
+        assert row["status"] == "active"
+        fetched = get_prescription(conn, row["id"])
+        assert fetched["id"] == row["id"]
+        assert fetched["patient_id"] == PATIENT_ID
+
+    def test_get_missing_returns_none(self, conn):
+        assert get_prescription(conn, "no-such-id") is None
+
+    def test_list_by_patient_sorted_desc(self, conn):
+        create_prescription(conn, _valid_create_payload(
+            medicine_name="OldDrug", start_date="2025-01-01T08:00:00+00:00"))
+        create_prescription(conn, _valid_create_payload(
+            medicine_name="NewDrug", start_date="2026-06-01T08:00:00+00:00"))
+        rows = list_by_patient(conn, PATIENT_ID)
+        assert len(rows) == 2
+        assert rows[0]["medicine_name"] == "NewDrug"
+        assert rows[1]["medicine_name"] == "OldDrug"
+
+    def test_list_empty_for_unknown_patient(self, conn):
+        assert list_by_patient(conn, "no-such-patient") == []
+
+
+class TestFreeFunctionValidation:
+    def test_missing_required_field_rejected(self, conn):
+        payload = _valid_create_payload()
+        del payload["medicine_name"]
+        with pytest.raises(RepoValidationError) as exc:
+            create_prescription(conn, payload)
+        assert exc.value.field == "medicine_name"
+
+    def test_non_numeric_dosage_rejected(self, conn):
+        with pytest.raises(RepoValidationError):
+            create_prescription(conn, _valid_create_payload(dosage_amount="500"))
+
+    def test_non_positive_dosage_rejected(self, conn):
+        with pytest.raises(RepoValidationError):
+            create_prescription(conn, _valid_create_payload(dosage_amount=-10))
+
+    def test_empty_dosage_unit_rejected(self, conn):
+        with pytest.raises(RepoValidationError):
+            create_prescription(conn, _valid_create_payload(dosage_unit="   "))
+
+    def test_non_string_dosage_unit_rejected(self, conn):
+        with pytest.raises(RepoValidationError):
+            create_prescription(conn, _valid_create_payload(dosage_unit=123))
+
+    def test_naive_start_date_rejected(self, conn):
+        with pytest.raises(RepoValidationError):
+            create_prescription(conn, _valid_create_payload(start_date="2026-01-01T08:00:00"))
+
+    def test_non_iso8601_start_date_rejected(self, conn):
+        with pytest.raises(RepoValidationError):
+            create_prescription(conn, _valid_create_payload(start_date="not-a-date"))
+
+    def test_end_date_before_start_rejected(self, conn):
+        with pytest.raises(RepoValidationError):
+            create_prescription(conn, _valid_create_payload(
+                start_date="2026-02-01T08:00:00+00:00",
+                end_date="2026-01-01T08:00:00+00:00"))
+
+    def test_end_date_naive_rejected(self, conn):
+        with pytest.raises(RepoValidationError):
+            create_prescription(conn, _valid_create_payload(
+                end_date="2026-01-10T08:00:00"))
+
+    def test_explicit_id_used_when_provided(self, conn):
+        rx_id = str(uuid.uuid4())
+        row = create_prescription(conn, _valid_create_payload(id=rx_id))
+        assert row["id"] == rx_id
+
+
+class TestFreeFunctionEnsurePatientDoctor:
+    def test_ensure_patient_rejects_empty(self, conn):
+        with pytest.raises(RepoValidationError):
+            ensure_patient(conn, "   ")
+
+    def test_ensure_doctor_rejects_empty(self, conn):
+        with pytest.raises(RepoValidationError):
+            ensure_doctor(conn, "   ")
+
+    def test_ensure_patient_idempotent(self, conn):
+        ensure_patient(conn, "new-patient")
+        ensure_patient(conn, "new-patient")  # second call is a no-op
+        assert get_prescription(conn, "new-patient") is None  # not a prescription
+
+    def test_ensure_doctor_idempotent(self, conn):
+        ensure_doctor(conn, "new-doctor", "Dr. Smith")
+        ensure_doctor(conn, "new-doctor", "Dr. Smith")
+        row = conn.execute("SELECT * FROM doctors WHERE id = ?", ("new-doctor",)).fetchone()
+        assert row["name"] == "Dr. Smith"
+
+
+class TestFreeFunctionTransitions:
+    def test_discontinue_requires_reason(self, conn):
+        row = create_prescription(conn, _valid_create_payload())
+        with pytest.raises(RepoValidationError):
+            discontinue_prescription(conn, row["id"], "")
+        with pytest.raises(RepoValidationError):
+            discontinue_prescription(conn, row["id"], "   ")
+
+    def test_discontinue_missing_prescription_raises_keyerror(self, conn):
+        with pytest.raises(KeyError):
+            discontinue_prescription(conn, "no-such-id", "reason")
+
+    def test_discontinue_non_active_rejected(self, conn):
+        row = create_prescription(conn, _valid_create_payload())
+        complete_prescription(conn, row["id"])
+        with pytest.raises(RepoValidationError):
+            discontinue_prescription(conn, row["id"], "late")
+
+    def test_complete_missing_prescription_raises_keyerror(self, conn):
+        with pytest.raises(KeyError):
+            complete_prescription(conn, "no-such-id")
+
+    def test_complete_non_active_rejected(self, conn):
+        row = create_prescription(conn, _valid_create_payload())
+        discontinue_prescription(conn, row["id"], "switched therapy")
+        with pytest.raises(RepoValidationError):
+            complete_prescription(conn, row["id"])
+
+    def test_complete_then_discontinue_blocked(self, conn):
+        row = create_prescription(conn, _valid_create_payload())
+        complete_prescription(conn, row["id"])
+        with pytest.raises(RepoValidationError):
+            discontinue_prescription(conn, row["id"], "reason")
+
+    def test_transition_recorded_in_status_transitions(self, conn):
+        row = create_prescription(conn, _valid_create_payload())
+        discontinue_prescription(conn, row["id"], "adverse reaction")
+        transitions = conn.execute(
+            "SELECT * FROM status_transitions WHERE prescription_id = ? ORDER BY transitioned_at",
+            (row["id"],),
+        ).fetchall()
+        assert len(transitions) == 1
+        assert transitions[0]["from_status"] == "active"
+        assert transitions[0]["to_status"] == "discontinued"
+        assert transitions[0]["reason"] == "adverse reaction"
