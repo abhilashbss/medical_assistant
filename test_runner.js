@@ -7,12 +7,19 @@ const path = require('path');
 
 const args = process.argv.slice(2);
 
-// Convert --grep to pytest -k flag
+// Convert --grep to pytest -k flag.
+// When the grep mentions "functional", target the dedicated functional test
+// file; otherwise default to the unit test file.
 let pytestArgs = ['tests/test_medication_tracker.py', '-v', '--tb=short'];
+let grepPattern = null;
 
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--grep' && i + 1 < args.length) {
-    const grepPattern = args[i + 1];
+    grepPattern = args[i + 1];
+    // 'functional.*medicine-tracker' targets the functional suite.
+    if (/functional/i.test(grepPattern)) {
+      pytestArgs[0] = 'tests/functional/test_medicine_tracker.py';
+    }
     // Convert regex pattern to pytest keyword expression
     // 'functional.*medicine-tracker' -> 'functional and medicine and tracker'
     // Split on regex metacharacters and combine with 'and'
@@ -33,7 +40,11 @@ if (!fs.existsSync(evidenceDir)) {
   fs.mkdirSync(evidenceDir, { recursive: true });
 }
 
-const result = spawnSync('.venv/bin/python', ['-m', 'pytest', ...pytestArgs], {
+// Resolve a Python interpreter: prefer a local venv, fall back to PATH.
+const venvPython = path.join(__dirname, '.venv', 'bin', 'python');
+const pythonBin = fs.existsSync(venvPython) ? venvPython : 'python3';
+
+const result = spawnSync(pythonBin, ['-m', 'pytest', ...pytestArgs], {
   encoding: 'utf-8',
   stdio: ['inherit', 'pipe', 'pipe']
 });
@@ -41,7 +52,7 @@ const result = spawnSync('.venv/bin/python', ['-m', 'pytest', ...pytestArgs], {
 // Write combined output to transcript
 const transcript = [
   '=== MEDICATION TRACKER FUNCTIONAL TEST TRANSCRIPT ===',
-  `Command: npm test -- --grep 'functional.*medicine-tracker'`,
+  `Command: npm test -- --grep '${grepPattern || ''}'`,
   `Date: ${new Date().toISOString()}`,
   '',
   '--- STDOUT ---',

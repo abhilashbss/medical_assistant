@@ -6,10 +6,6 @@ This module tests:
 - Mark-as-taken action creates timestamped dose records
 - Status filtering (active vs completed)
 - Data persistence across app restarts
-<<<<<<< HEAD
-"""
-
-=======
 
 A console transcript of real HTTP request/response pairs is captured into
 .see/e2e-artifacts/console-transcript.txt to provide milestone-level evidence
@@ -17,7 +13,6 @@ that the medication list UI's backend contract works end-to-end.
 """
 
 import json
->>>>>>> 47172f7 (runctl: build runctl/build-5c677d80 (pass))
 import pytest
 import tempfile
 import os
@@ -39,8 +34,6 @@ from medication_tracker import (
 )
 
 
-<<<<<<< HEAD
-=======
 # --- Transcript capture infrastructure ---------------------------------------
 
 EVIDENCE_DIR = Path(__file__).parent.parent.parent / '.see' / 'e2e-artifacts'
@@ -96,7 +89,6 @@ class _TranscriptClient:
         return getattr(self._client, name)
 
 
->>>>>>> 47172f7 (runctl: build runctl/build-5c677d80 (pass))
 @pytest.fixture
 def test_db_path():
     """Create a temporary database file for testing."""
@@ -116,9 +108,6 @@ def app(test_db_path):
 
 @pytest.fixture
 def client(app):
-<<<<<<< HEAD
-    """Create test client for Flask app."""
-=======
     """Create test client for Flask app, wrapped to capture a transcript."""
     return _TranscriptClient(app.test_client())
 
@@ -126,7 +115,6 @@ def client(app):
 @pytest.fixture
 def raw_client(app):
     """Unwrapped test client for tests that need direct access."""
->>>>>>> 47172f7 (runctl: build runctl/build-5c677d80 (pass))
     return app.test_client()
 
 
@@ -138,8 +126,6 @@ def repository(test_db_path):
     return MedicationRepository(db)
 
 
-<<<<<<< HEAD
-=======
 @pytest.fixture(autouse=True)
 def _transcript_section(request):
     """Mark each test's transcript entries with a section header."""
@@ -171,7 +157,6 @@ def _flush_transcript(request):
     _write_transcript()
 
 
->>>>>>> 47172f7 (runctl: build runctl/build-5c677d80 (pass))
 class TestFunctionalMedicationAPI:
     """Functional tests for medication API endpoints."""
 
@@ -350,11 +335,7 @@ class TestFunctionalMedicationAPI:
         repository.create(medication)
 
         # Mark as taken
-<<<<<<< HEAD
-        response = client.post(f'/medications/{medication.id}/dose', json={})
-=======
         response = client.post(f'/medications/{medication.id}/doses', json={})
->>>>>>> 47172f7 (runctl: build runctl/build-5c677d80 (pass))
         assert response.status_code == 201
         data = response.get_json()
         assert data['medication_id'] == str(medication.id)
@@ -370,11 +351,7 @@ class TestFunctionalMedicationAPI:
         )
         repository.create(medication)
 
-<<<<<<< HEAD
-        response = client.post(f'/medications/{medication.id}/dose', json={
-=======
         response = client.post(f'/medications/{medication.id}/doses', json={
->>>>>>> 47172f7 (runctl: build runctl/build-5c677d80 (pass))
             'date': '2026-09-20'
         })
 
@@ -659,8 +636,6 @@ class TestFunctionalMedicationList:
         assert response.status_code == 200
         data = response.get_json()
         assert data['status'] == 'healthy'
-<<<<<<< HEAD
-=======
 
 
 class TestMedicationListUIIntegration:
@@ -844,4 +819,3 @@ class TestMedicationListUIIntegration:
         response = client.get('/medications?status=active')
         assert response.status_code == 200
         assert response.get_json() == []
->>>>>>> 47172f7 (runctl: build runctl/build-5c677d80 (pass))
