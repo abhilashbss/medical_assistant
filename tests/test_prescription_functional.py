@@ -479,3 +479,49 @@ def test_evidence_transcript(client):
 
     t.write(TRANSCRIPT_PATH)
     assert TRANSCRIPT_PATH.exists() and TRANSCRIPT_PATH.stat().st_size > 0
+
+
+# --------------------------------------------------------------------------- #
+# Persistence without MEDICATION_TRACKER_DB (the live-E2E configuration)
+# --------------------------------------------------------------------------- #
+# The rest of this suite always sets MEDICATION_TRACKER_DB to a tmp file via
+# the autouse `env` fixture. The feature-level E2E, however, drives the real
+# app the way a user would: with no such env var set. That path used to fall
+# through to db.connect(None) -> an ephemeral :memory: database opened per
+# request, so every row vanished the moment its connection closed — create
+# returned 201 but retrieve returned 404 and history came back empty. This
+# test pins the on-disk fallback so that regression cannot return silently.
+
+def test_persists_across_requests_without_env_var(tmp_path, monkeypatch):
+    monkeypatch.delenv("MEDICATION_TRACKER_DB", raising=False)
+    # Redirect the package's default on-disk location into tmp_path so the
+    # test does not write a real db file into the installed package dir.
+    # Patch on the app module because app.py imports `database_file` by name,
+    # so monkeypatching medication_tracker.db.database_file would not reach it.
+    import medication_tracker.app as appmod
+
+    monkeypatch.setattr(
+        appmod, "database_file", lambda: tmp_path / "default.db"
+    )
+
+    from medication_tracker.app import create_app
+
+    with TestClient(create_app()) as c:
+        pid = str(uuid.uuid4())
+        doctor = str(uuid.uuid4())
+        r = c.post(
+            f"/patients/{pid}/prescriptions",
+            json=_valid_payload(doctor, medicine_name="Amoxicillin"),
+        )
+        assert r.status_code == 201, r.text
+        rx_id = r.json()["id"]
+
+        # A *separate* request must see the row created above. This is the
+        # assertion that fails when each request gets its own :memory: db.
+        r2 = c.get(f"/prescriptions/{rx_id}")
+        assert r2.status_code == 200, r2.text
+        assert r2.json()["id"] == rx_id
+
+        history = c.get(f"/patients/{pid}/prescriptions").json()
+        assert len(history) == 1
+        assert history[0]["id"] == rx_id
