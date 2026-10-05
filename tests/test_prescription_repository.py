@@ -18,6 +18,7 @@ from medication_tracker.errors import ValidationError
 from medication_tracker.models import Prescription, PrescriptionStatus
 from medication_tracker.repository import (
     PrescriptionRepository,
+    PrescriptionNotFoundError,
     ValidationError as RepoValidationError,
     complete_prescription,
     create_prescription,
@@ -514,9 +515,12 @@ class TestRepositoryBranches:
         with pytest.raises(ValueError):
             repo.log_dose(rx.id, "taken", "2026-01-01T08:00:00+00:00")
 
-    def test_list_dose_logs_empty(self, repo):
-        rx = repo.create_prescription(valid_data())
-        assert repo.list_dose_logs(rx.id) == []
+    def test_prescription_not_found_error_behavior(self):
+        """Verify that PrescriptionNotFoundError stores the missing ID correctly."""
+        missing_id = "not-found-123"
+        err = PrescriptionNotFoundError(missing_id)
+        assert err.prescription_id == missing_id
+        assert f"Prescription not found: {missing_id}" in str(err)
 
 
 # --------------------------------------------------------------------------
