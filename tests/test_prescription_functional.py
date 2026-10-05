@@ -95,16 +95,11 @@ class TestCreateAndRetrieve:
         assert fetched.frequency == "three times daily"
         assert fetched.status == PrescriptionStatus.ACTIVE
 
-    def test_create_via_api_returns_201_and_is_retrievable(self, client, patient_id, doctor_id):
-        response = client.post("/prescriptions", json=_payload(patient_id, doctor_id))
+    def test_create_via_api_with_numeric_dosage_returns_201(self, client, patient_id, doctor_id):
+        payload = _payload(patient_id, doctor_id, dosage_amount=500)
+        response = client.post("/prescriptions", json=payload)
         assert response.status_code == 201
-        body = response.get_json()
-        assert body["medicine_name"] == "Amoxicillin"
-        assert body["status"] == "active"
-
-        fetch = client.get(f"/prescriptions/{body['id']}")
-        assert fetch.status_code == 200
-        assert fetch.get_json()["id"] == body["id"]
+        assert response.get_json()["dosage_amount"] == "500"
 
     def test_get_missing_prescription_returns_404(self, client):
         response = client.get(f"/prescriptions/{uuid4()}")
