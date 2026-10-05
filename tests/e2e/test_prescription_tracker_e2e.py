@@ -24,18 +24,22 @@ regression in any gate-relevant behaviour fails the feature E2E.
 from __future__ import annotations
 
 from datetime import datetime
+
 from pathlib import Path
+
 from typing import Iterator
+
 from uuid import uuid4
 
 import pytest
+
 from fastapi.testclient import TestClient
+
 
 
 @pytest.fixture
 def db_path(tmp_path: Path) -> Path:
     return tmp_path / "e2e.db"
-
 
 @pytest.fixture
 def client(db_path: Path, monkeypatch) -> Iterator[TestClient]:
@@ -45,7 +49,6 @@ def client(db_path: Path, monkeypatch) -> Iterator[TestClient]:
 
     with TestClient(create_app()) as c:
         yield c
-
 
 def _payload(doctor_id: str | None = None, **overrides):
     """A minimal valid prescription request body."""
@@ -61,7 +64,6 @@ def _payload(doctor_id: str | None = None, **overrides):
     }
     base.update(overrides)
     return base
-
 
 def test_prescription_tracker_lifecycle_end_to_end(client):
     """The full create -> history -> discontinue -> validation -> duplicate path."""
