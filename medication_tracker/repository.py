@@ -44,6 +44,13 @@ _ISO8601_TZ = re.compile(
 )
 
 
+class PrescriptionNotFoundError(Exception):
+    """Raised when a prescription is not found in the repository."""
+    def __init__(self, prescription_id: str):
+        super().__init__(f"Prescription not found: {prescription_id}")
+        self.prescription_id = prescription_id
+
+
 class ValidationError(ValueError):
     """Raised when input fails application-level validation (API path).
 

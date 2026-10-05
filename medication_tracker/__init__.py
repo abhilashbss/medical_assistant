@@ -8,7 +8,7 @@ Public surface:
 
 from medication_tracker.errors import ValidationError
 from medication_tracker.models import Prescription, PrescriptionStatus
-from medication_tracker.repository import PrescriptionRepository
+from medication_tracker.repository import PrescriptionRepository, PrescriptionNotFoundError
 from medication_tracker.validators import validate_prescription
 
 __all__ = [
@@ -17,4 +17,5 @@ __all__ = [
     "ValidationError",
     "validate_prescription",
     "PrescriptionRepository",
+    "PrescriptionNotFoundError",
 ]
