@@ -57,7 +57,6 @@ class Prescription:
         ISO 8601 datetime string with a timezone offset; set when persisted.
     """
 
-    id: str
     patient_id: str
     doctor_id: str
     medicine_name: str
@@ -65,6 +64,7 @@ class Prescription:
     dosage_unit: str
     frequency: str
     start_date: str
+    id: str = field(default_factory=lambda: str(uuid4()))
     end_date: Optional[str] = None
     status: PrescriptionStatus = PrescriptionStatus.ACTIVE
     created_at: Optional[str] = None
