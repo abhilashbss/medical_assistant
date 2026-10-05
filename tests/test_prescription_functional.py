@@ -278,6 +278,13 @@ class TestDiscontinueReasonAndImmutability:
         delete_resp = client.delete(f"/prescriptions/{rx_id}")
         assert delete_resp.status_code == 405
 
+    def test_only_post_allowed_on_prescriptions_collection(self, client):
+        """Only POST is allowed on /prescriptions; GET, PUT, DELETE must return 405."""
+        for method in ["get", "put", "delete"]:
+            resp = getattr(client, method)("/prescriptions")
+            assert resp.status_code == 405, f"{method.upper()} should be rejected with 405 on /prescriptions"
+
+
 
 # ----------------------------------------------------------------------
 # Concurrent active prescription uniqueness (partial index)
