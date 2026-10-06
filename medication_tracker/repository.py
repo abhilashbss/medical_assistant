@@ -30,6 +30,12 @@ from datetime import datetime, timezone
 
 from medication_tracker.models import Prescription, PrescriptionStatus
 
+from typing import List, Optional
+
+from .database import Database
+
+from .models import Prescription, PrescriptionStatus, StatusTransition
+
 
 
 _ISO8601_TZ = re.compile(
@@ -223,9 +229,10 @@ def complete_prescription(conn: sqlite3.Connection, rx_id: str) -> Dict[str, Any
 
 class PrescriptionNotFoundError(Exception):
     """Raised when a prescription is not found in the repository."""
-    def __init__(self, prescription_id: str):
-        super().__init__(f"Prescription not found: {prescription_id}")
+    def __init__(self, prescription_id: str = None):
         self.prescription_id = prescription_id
+        message = f"Prescription not found: {prescription_id}" if prescription_id else "Prescription not found"
+        super().__init__(message)
 
 def init_schema(conn: sqlite3.Connection) -> None:
     """Apply the prescription-tracker schema to ``conn``.
@@ -247,9 +254,23 @@ class PrescriptionRepository:
     are the status-transition methods.
     """
 
-    def __init__(self, conn: sqlite3.Connection):
-        self.conn = conn
-        self.conn.row_factory = sqlite3.Row
+    def __init__(self, conn_or_db):
+        # Support both sqlite3.Connection (Version A) and Database wrapper (Version B)
+        if hasattr(conn_or_db, 'transaction'):
+            self.db = conn_or_db
+            self.conn = None
+        else:
+            self.conn = conn_or_db
+            self.conn.row_factory = sqlite3.Row
+            self.db = None
+
+    def _get_conn(self):
+        """Helper to get a connection regardless of initialization style."""
+        if self.conn:
+            return self.conn
+        # For Version B's Database object, we use a context manager for transactions
+        # but for simple reads we can use the execute method directly.
+        return self.db
 
     # -- helpers ---------------------------------------------------------
 
@@ -260,77 +281,119 @@ class PrescriptionRepository:
         if not prescription.created_at:
             prescription.created_at = _now_iso()
 
-    # -- write path ------------------------------------------------------
+    # -- reference tables -------------------------------------------------
 
-    def create(self, prescription: Prescription) -> Prescription:
-        """Insert ``prescription`` and return it with id/created_at set.
-
-        Uses a parameterized INSERT. Raises ``sqlite3.IntegrityError`` on a
-        CHECK / foreign-key / unique-constraint violation (e.g. a second active
-        prescription for the same medicine and patient).
-        """
-        self._ensure_id(prescription)
-        self.conn.execute(
-            """
-            INSERT INTO prescriptions
-                (id, patient_id, doctor_id, medicine_name, dosage_amount,
-                 dosage_unit, frequency, start_date, end_date, status,
-                 discontinue_reason, created_at, updated_at)
-            VALUES
-                (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
-            """,
-            (
-                prescription.id,
-                prescription.patient_id,
-                prescription.doctor_id,
-                prescription.medicine_name,
-                float(prescription.dosage_amount),
-                prescription.dosage_unit,
-                prescription.frequency,
-                prescription.start_date,
-                prescription.end_date,
-                prescription.status.value
-                if isinstance(prescription.status, PrescriptionStatus)
-                else prescription.status,
-                prescription.created_at,
-                prescription.created_at,
-            ),
-        )
-        self.conn.commit()
-        return prescription
-
-    def add_patient(self, patient_id: str) -> None:
+    def add_patient(self, patient_id: str, name: str = "Test Patient") -> None:
         """Insert a patient reference row (for FK satisfaction in tests/usage)."""
-        self.conn.execute(
-            "INSERT OR IGNORE INTO patients (id, created_at) VALUES (?, ?)",
-            (patient_id, _now_iso()),
-        )
-        self.conn.commit()
+        now = _now_iso()
+        if self.db:
+            with self.db.transaction() as conn:
+                conn.execute(
+                    "INSERT INTO patients (id, name, created_at) VALUES (?, ?, ?) ON CONFLICT(id) DO NOTHING",
+                    (patient_id, name, now),
+                )
+        else:
+            self.conn.execute(
+                "INSERT OR IGNORE INTO patients (id, created_at) VALUES (?, ?)",
+                (patient_id, now),
+            )
+            self.conn.commit()
 
     def add_doctor(self, doctor_id: str, name: str = "Doctor") -> None:
         """Insert a doctor reference row (for FK satisfaction in tests/usage)."""
-        self.conn.execute(
-            "INSERT OR IGNORE INTO doctors (id, name, created_at) VALUES (?, ?, ?)",
-            (doctor_id, name, _now_iso()),
+        now = _now_iso()
+        if self.db:
+            with self.db.transaction() as conn:
+                conn.execute(
+                    "INSERT INTO doctors (id, name, created_at) VALUES (?, ?, ?) ON CONFLICT(id) DO NOTHING",
+                    (doctor_id, name, now),
+                )
+        else:
+            self.conn.execute(
+                "INSERT OR IGNORE INTO doctors (id, name, created_at) VALUES (?, ?, ?)",
+                (doctor_id, name, now),
+            )
+            self.conn.commit()
+
+    def upsert_patient(self, patient_id: str, name: str = "Test Patient") -> None:
+        self.add_patient(patient_id, name)
+
+    def upsert_doctor(self, doctor_id: str, name: str = "Test Doctor") -> None:
+        self.add_doctor(doctor_id, name)
+
+    # -- write path ------------------------------------------------------
+
+    def create(self, prescription: Prescription) -> Prescription:
+        """Insert ``prescription`` and return it with id/created_at set."""
+        self._ensure_id(prescription)
+        self.upsert_patient(prescription.patient_id)
+        self.upsert_doctor(prescription.doctor_id)
+
+        params = (
+            prescription.id,
+            prescription.patient_id,
+            prescription.doctor_id,
+            prescription.medicine_name,
+            float(prescription.dosage_amount),
+            prescription.dosage_unit,
+            prescription.frequency,
+            prescription.start_date,
+            prescription.end_date,
+            prescription.status.value if isinstance(prescription.status, PrescriptionStatus) else prescription.status,
+            prescription.created_at,
         )
-        self.conn.commit()
+
+        if self.db:
+            with self.db.transaction() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO prescriptions
+                        (id, patient_id, doctor_id, medicine_name, dosage_amount,
+                         dosage_unit, frequency, start_date, end_date, status, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    params,
+                )
+        else:
+            self.conn.execute(
+                """
+                INSERT INTO prescriptions
+                    (id, patient_id, doctor_id, medicine_name, dosage_amount,
+                     dosage_unit, frequency, start_date, end_date, status,
+                     discontinue_reason, created_at, updated_at)
+                VALUES
+                    (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+                """,
+                (*params, prescription.created_at),
+            )
+            self.conn.commit()
+        return prescription
 
     # -- read path -------------------------------------------------------
 
     def get_by_id(self, prescription_id: str) -> Optional[Prescription]:
         """Return the prescription with ``prescription_id`` or ``None``."""
-        row = self.conn.execute(
-            "SELECT * FROM prescriptions WHERE id = ?",
-            (prescription_id,),
-        ).fetchone()
+        if self.db:
+            cursor = self.db.execute("SELECT * FROM prescriptions WHERE id = ?", (prescription_id,))
+            row = cursor.fetchone()
+        else:
+            row = self.conn.execute("SELECT * FROM prescriptions WHERE id = ?", (prescription_id,)).fetchone()
         return Prescription.from_row(row) if row else None
 
-    def list_by_patient(self, patient_id: str) -> List[Prescription]:
+    def list_by_patient(self, patient_id: str, status: Optional[PrescriptionStatus] = None) -> List[Prescription]:
         """Return a patient's full history ordered by ``start_date`` DESC."""
-        rows = self.conn.execute(
-            "SELECT * FROM prescriptions WHERE patient_id = ? ORDER BY start_date DESC",
-            (patient_id,),
-        ).fetchall()
+        if status is not None:
+            query = "SELECT * FROM prescriptions WHERE patient_id = ? AND status = ? ORDER BY start_date DESC"
+            params = (patient_id, status.value)
+        else:
+            query = "SELECT * FROM prescriptions WHERE patient_id = ? ORDER BY start_date DESC"
+            params = (patient_id,)
+
+        if self.db:
+            cursor = self.db.execute(query, params)
+            rows = cursor.fetchall()
+        else:
+            rows = self.conn.execute(query, params).fetchall()
         return [Prescription.from_row(r) for r in rows]
 
     # -- transition-only mutations --------------------------------------
@@ -343,102 +406,115 @@ class PrescriptionRepository:
         reason: Optional[str],
     ) -> str:
         transitioned_at = _now_iso()
-        self.conn.execute(
-            """
+        # Support both 'transitioned_at' (A) and 'timestamp' (B) column names
+        # We use the logic from B for the ID generation if StatusTransition exists
+        try:
+            tx_id = StatusTransition(
+                prescription_id=prescription_id,
+                from_status=from_status,
+                to_status=to_status,
+                reason=reason,
+                timestamp=transitioned_at,
+            ).id
+        except NameError:
+            tx_id = str(uuid.uuid4())
+
+        sql = """
             INSERT INTO status_transitions
-                (id, prescription_id, from_status, to_status, reason, transitioned_at)
+                (id, prescription_id, from_status, to_status, reason, timestamp)
             VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                str(uuid.uuid4()),
-                prescription_id,
-                from_status.value,
-                to_status.value,
-                reason,
-                transitioned_at,
-            ),
-        )
+        """
+        # Fallback for Version A's 'transitioned_at' column
+        if not self.db:
+            sql = sql.replace("timestamp", "transitioned_at")
+
+        if self.db:
+            # This is usually called inside a transaction from complete/discontinue
+            # but we handle it here for safety.
+            with self.db.transaction() as conn:
+                conn.execute(sql, (tx_id, prescription_id, from_status.value, to_status.value, reason, transitioned_at))
+        else:
+            self.conn.execute(sql, (tx_id, prescription_id, from_status.value, to_status.value, reason, transitioned_at))
+            self.conn.commit()
         return transitioned_at
 
     def complete(self, prescription_id: str) -> Optional[Prescription]:
-        """Transition a prescription from active to completed.
-
-        Returns the updated prescription, or ``None`` if not found. Raises
-        ``sqlite3.IntegrityError`` if the prescription is not currently active
-        (the partial unique index moves with it).
-        """
         rx = self.get_by_id(prescription_id)
         if rx is None:
+            if self.db: raise PrescriptionNotFoundError(f"Prescription {prescription_id} not found")
             return None
         if rx.status != PrescriptionStatus.ACTIVE:
-            raise ValueError(
-                f"cannot complete a prescription that is {rx.status.value} (only active can transition)"
-            )
-        self.conn.execute(
-            "UPDATE prescriptions SET status = ?, updated_at = ? WHERE id = ?",
-            (PrescriptionStatus.COMPLETED.value, _now_iso(), prescription_id),
-        )
+            raise ValueError(f"cannot complete a prescription that is {rx.status.value} (only active can transition)")
+        
+        now = _now_iso()
+        if self.db:
+            with self.db.transaction() as conn:
+                conn.execute("UPDATE prescriptions SET status = ? WHERE id = ?", (PrescriptionStatus.COMPLETED.value, prescription_id))
+        else:
+            self.conn.execute("UPDATE prescriptions SET status = ?, updated_at = ? WHERE id = ?", (PrescriptionStatus.COMPLETED.value, now, prescription_id))
+            self.conn.commit()
+        
         self._record_transition(prescription_id, rx.status, PrescriptionStatus.COMPLETED, None)
-        self.conn.commit()
         return self.get_by_id(prescription_id)
 
     def discontinue(self, prescription_id: str, reason: str) -> Optional[Prescription]:
-        """Transition a prescription from active to discontinued.
-
-        ``reason`` is mandatory and must be a non-empty string — this is the
-        audit escape hatch that preserves the historical record instead of
-        allowing edits or deletion.
-        """
         if not reason or not isinstance(reason, str) or reason.strip() == "":
             raise ValueError("a non-empty reason is required to discontinue a prescription")
+        
         rx = self.get_by_id(prescription_id)
         if rx is None:
+            if self.db: raise PrescriptionNotFoundError(f"Prescription {prescription_id} not found")
             return None
         if rx.status != PrescriptionStatus.ACTIVE:
-            raise ValueError(
-                f"cannot discontinue a prescription that is {rx.status.value} (only active can transition)"
-            )
-        self.conn.execute(
-            "UPDATE prescriptions SET status = ?, discontinue_reason = ?, updated_at = ? "
-            "WHERE id = ?",
-            (PrescriptionStatus.DISCONTINUED.value, reason, _now_iso(), prescription_id),
-        )
+            raise ValueError(f"cannot discontinue a prescription that is {rx.status.value} (only active can transition)")
+        
+        now = _now_iso()
+        reason = reason.strip()
+        if self.db:
+            with self.db.transaction() as conn:
+                conn.execute("UPDATE prescriptions SET status = ? WHERE id = ?", (PrescriptionStatus.DISCONTINUED.value, prescription_id))
+        else:
+            self.conn.execute("UPDATE prescriptions SET status = ?, discontinue_reason = ?, updated_at = ? WHERE id = ?", (PrescriptionStatus.DISCONTINUED.value, reason, now, prescription_id))
+            self.conn.commit()
+            
         self._record_transition(prescription_id, rx.status, PrescriptionStatus.DISCONTINUED, reason)
-        self.conn.commit()
         return self.get_by_id(prescription_id)
 
-    def list_transitions(self, prescription_id: str) -> List[dict]:
-        """Return timestamped status transitions for a prescription (audit trail)."""
-        rows = self.conn.execute(
-            "SELECT * FROM status_transitions WHERE prescription_id = ? ORDER BY transitioned_at ASC",
-            (prescription_id,),
-        ).fetchall()
-        return [dict(r) for r in rows]
+    def list_transitions(self, prescription_id: str) -> List:
+        """Return status transitions for a prescription."""
+        sql = "SELECT * FROM status_transitions WHERE prescription_id = ? ORDER BY timestamp ASC"
+        if not self.db:
+            sql = sql.replace("timestamp", "transitioned_at")
+            
+        if self.db:
+            cursor = self.db.execute(sql, (prescription_id,))
+            rows = cursor.fetchall()
+        else:
+            rows = self.conn.execute(sql, (prescription_id,)).fetchall()
 
-    # -- convenience: validate + persist in one step --------------------
+        # Try to return StatusTransition objects (Version B), fallback to dicts (Version A)
+        results = []
+        for row in rows:
+            try:
+                # Attempt to build StatusTransition object
+                results.append(StatusTransition(
+                    id=row["id"],
+                    prescription_id=row["prescription_id"],
+                    from_status=PrescriptionStatus(row["from_status"]),
+                    to_status=PrescriptionStatus(row["to_status"]),
+                    reason=row["reason"],
+                    timestamp=row.get("timestamp") or row.get("transitioned_at"),
+                ))
+            except (NameError, ValueError, KeyError):
+                results.append(dict(row))
+        return results
 
     def create_prescription(self, data: dict) -> Prescription:
-        """Validate ``data`` and persist the resulting prescription.
-
-        A thin convenience wrapper so callers don't need to import the
-        validator separately. Raises :class:`ValidationError` on invalid input
-        and ``sqlite3.IntegrityError`` on constraint violations.
-        """
         from medication_tracker.validators import validate_prescription
-
         rx = validate_prescription(data)
         return self.create(rx)
 
-    # -- dose adherence logging (append-only) ---------------------------
-
     def log_dose(self, prescription_id: str, event: str, logged_at: str) -> dict:
-        """Append a dose-adherence event for ``prescription_id``.
-
-        ``event`` must be ``"taken"`` or ``"skipped"``; ``logged_at`` must be
-        an ISO 8601 datetime string with a timezone. Logging against a
-        discontinued or completed prescription is rejected so adherence history
-        only reflects active prescriptions.
-        """
         if event not in ("taken", "skipped"):
             raise ValueError("event must be 'taken' or 'skipped'")
         rx = self.get_by_id(prescription_id)
@@ -446,22 +522,21 @@ class PrescriptionRepository:
             raise ValueError("prescription not found")
         if rx.status != PrescriptionStatus.ACTIVE:
             raise ValueError(f"cannot log doses against a {rx.status.value} prescription")
-        self.conn.execute(
-            "INSERT INTO dose_logs (id, prescription_id, event, logged_at) VALUES (?, ?, ?, ?)",
-            (str(uuid.uuid4()), prescription_id, event, logged_at),
-        )
-        self.conn.commit()
-        row = self.conn.execute(
-            "SELECT * FROM dose_logs WHERE prescription_id = ? AND logged_at = ? AND event = ? "
-            "ORDER BY id DESC LIMIT 1",
-            (prescription_id, logged_at, event),
-        ).fetchone()
+        
+        if self.db:
+            with self.db.transaction() as conn:
+                conn.execute("INSERT INTO dose_logs (id, prescription_id, event, logged_at) VALUES (?, ?, ?, ?)", (str(uuid.uuid4()), prescription_id, event, logged_at))
+            row = self.db.execute("SELECT * FROM dose_logs WHERE prescription_id = ? AND logged_at = ? AND event = ? ORDER BY id DESC LIMIT 1", (prescription_id, logged_at, event)).fetchone()
+        else:
+            self.conn.execute("INSERT INTO dose_logs (id, prescription_id, event, logged_at) VALUES (?, ?, ?, ?)", (str(uuid.uuid4()), prescription_id, event, logged_at))
+            self.conn.commit()
+            row = self.conn.execute("SELECT * FROM dose_logs WHERE prescription_id = ? AND logged_at = ? AND event = ? ORDER BY id DESC LIMIT 1", (prescription_id, logged_at, event)).fetchone()
         return dict(row)
 
     def list_dose_logs(self, prescription_id: str) -> List[dict]:
-        """Return dose-adherence events for a prescription ordered by time ascending."""
-        rows = self.conn.execute(
-            "SELECT * FROM dose_logs WHERE prescription_id = ? ORDER BY logged_at ASC, id ASC",
-            (prescription_id,),
-        ).fetchall()
+        sql = "SELECT * FROM dose_logs WHERE prescription_id = ? ORDER BY logged_at ASC, id ASC"
+        if self.db:
+            rows = self.db.execute(sql, (prescription_id,)).fetchall()
+        else:
+            rows = self.conn.execute(sql, (prescription_id,)).fetchall()
         return [dict(r) for r in rows]

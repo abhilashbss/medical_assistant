@@ -18,3 +18,5 @@ medication_tracker/medication_tracker.db
 
 # E2E transcript artifacts (regenerated each gate run)
 .see/e2e-artifacts/
+.vendor/
+*.egg-info/
