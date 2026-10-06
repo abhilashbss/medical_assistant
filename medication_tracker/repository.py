@@ -34,7 +34,7 @@ from typing import List, Optional
 
 from .database import Database
 
-from .models import Prescription, PrescriptionStatus, StatusTransition
+from .models import Prescription, PrescriptionStatus, StatusTransition, _now_iso
 
 
 
@@ -68,9 +68,6 @@ def _validate_iso8601_tz(value: str, field: str) -> str:
         raise ValidationError(field, "must be an ISO 8601 datetime with timezone")
     return value
 
-def _now_iso() -> str:
-    """Current UTC time as an ISO 8601 string with an offset."""
-    return datetime.now(timezone.utc).isoformat()
 
 def ensure_patient(conn: sqlite3.Connection, patient_id: str) -> str:
     """Insert a patient row if absent so prescriptions can reference it."""

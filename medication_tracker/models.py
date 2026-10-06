@@ -18,6 +18,10 @@ from dataclasses import dataclass, field
 
 from datetime import datetime, timezone
 
+def _now_iso() -> str:
+    """Current UTC time as an ISO 8601 string with timezone."""
+    return datetime.now(timezone.utc).isoformat()
+
 from uuid import uuid4
 
 
@@ -152,9 +156,6 @@ class Prescription:
             created_at=row["created_at"],
         )
 
-def _now_iso() -> str:
-    """Current UTC time as an ISO 8601 string with timezone."""
-    return datetime.now(timezone.utc).isoformat()
 
 @dataclass
 class StatusTransition:
