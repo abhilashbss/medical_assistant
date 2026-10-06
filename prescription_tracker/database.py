@@ -3,7 +3,7 @@
 import sqlite3
 from contextlib import contextmanager
 from typing import Optional
-
+import threading
 
 class Database:
     """SQLite database manager for the prescription tracker."""
@@ -14,41 +14,51 @@ class Database:
         Args:
             db_path: Path to SQLite database file. Defaults to in-memory database.
         """
-        if db_path is None:
-            self.db_path = ":memory:"
+        if db_path is None or db_path == ":memory:":
+            self.db_path = "file:memdb1?mode=memory&cache=shared"
         else:
             self.db_path = db_path
-        self._connection: Optional[sqlite3.Connection] = None
+
+        self._conn = sqlite3.connect(self.db_path, check_same_thread=False, timeout=20)
+        self._conn.row_factory = sqlite3.Row
+        self._conn.execute("PRAGMA foreign_keys = ON")
+        self._conn.execute("PRAGMA journal_mode = WAL")
+        self._lock = threading.Lock()
 
     def connect(self) -> sqlite3.Connection:
-        """Create and return a database connection."""
-        if self._connection is None:
-            self._connection = sqlite3.connect(self.db_path)
-            self._connection.row_factory = sqlite3.Row
-            self._connection.execute("PRAGMA foreign_keys = ON")
-        return self._connection
+        """Return the shared database connection."""
+        return self._conn
 
     def close(self):
         """Close the database connection."""
-        if self._connection:
-            self._connection.close()
-            self._connection = None
+        if self._conn:
+            self._conn.close()
+            self._conn = None
 
     @contextmanager
     def transaction(self):
-        """Context manager for a database transaction."""
-        conn = self.connect()
-        try:
-            yield conn
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
+        """Context manager for a database transaction.
+
+        Synchronizes access via a lock to prevent 'database is locked'
+        errors during concurrent writes.
+        """
+        with self._lock:
+            try:
+                yield self._conn
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
 
     def execute(self, query: str, params: tuple = ()) -> sqlite3.Cursor:
-        """Execute a SQL query and return the cursor."""
-        conn = self.connect()
-        return conn.execute(query, params)
+        """Execute a SQL query and return the cursor.
+
+        Synchronizes access via a lock to ensure consistency and
+        avoid lock contention.
+        """
+        with self._lock:
+            return self._conn.execute(query, params)
+
 
     def init_schema(self):
         """Create the prescription tracker schema (idempotent)."""

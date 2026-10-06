@@ -17,18 +17,21 @@ from uuid import uuid4
 
 import pytest
 
+import concurrent.futures
 from prescription_tracker.models import Prescription, PrescriptionStatus
 from prescription_tracker.service import ConflictError, PrescriptionService
+
 
 
 # ----------------------------------------------------------------------
 # Fixtures local to the functional suite
 # ----------------------------------------------------------------------
 @pytest.fixture
-def app():
+def app(tmp_path):
     from prescription_tracker.api import create_app
 
-    application = create_app(db_path=":memory:")
+    db_path = str(tmp_path / "test.db")
+    application = create_app(db_path=db_path)
     return application
 
 
@@ -335,6 +338,24 @@ class TestOneActivePerMedicine:
         )
         row = cursor.fetchone()
         assert row is not None, "partial unique index idx_one_active_per_medicine must exist"
+
+    def test_concurrent_creations_do_not_raise_threading_errors(self, service, patient_id, doctor_id):
+        """Ensure that creating prescriptions across multiple threads does not raise SQLite threading errors."""
+        def create_rx(i):
+            rx = Prescription(
+                patient_id=patient_id, doctor_id=doctor_id,
+                medicine_name=f"Med{i}", dosage_amount="100",
+                dosage_unit="mg", frequency="daily",
+                start_date="2026-01-01T08:00:00+00:00",
+            )
+            return service.create_prescription(rx)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            results = list(executor.map(create_rx, range(10)))
+
+        assert len(results) == 10
+        assert all(rx.status == PrescriptionStatus.ACTIVE for rx in results)
+
 
 
 # ----------------------------------------------------------------------
