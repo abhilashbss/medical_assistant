@@ -33,7 +33,7 @@ from uuid import uuid4
 
 import pytest
 
-from fastapi.testclient import TestClient
+from typing import Iterator
 
 
 
@@ -42,7 +42,7 @@ def db_path(tmp_path: Path) -> Path:
     return tmp_path / "e2e.db"
 
 @pytest.fixture
-def client(db_path: Path, monkeypatch, app) -> Iterator[TestClient]:
+def client(db_path: Path, monkeypatch, app) -> Iterator:
     monkeypatch.setenv("MEDICATION_TRACKER_DB", str(db_path))
     with app.test_client() as c:
         yield c
@@ -78,7 +78,7 @@ def test_prescription_tracker_lifecycle_end_to_end(client):
         create_resp = client.post("/prescriptions", json=_payload(patient_id, doctor_id))
     
     assert create_resp.status_code == 201, create_resp.text
-    created = create_resp.json()
+    created = create_resp.json
     rx_id = created["id"]
     assert created["patient_id"] == p_id_str
     assert created["medicine_name"] == "Amoxicillin"
@@ -89,7 +89,7 @@ def test_prescription_tracker_lifecycle_end_to_end(client):
     # The created prescription is retrievable by id.
     fetch = client.get(f"/prescriptions/{rx_id}")
     assert fetch.status_code == 200
-    assert fetch.json()["id"] == rx_id
+    assert fetch.json["id"] == rx_id
 
     # 2. Fetch the patient's prescription history sorted by start date.
     newer_payload = _payload(patient_id, doctor_id, medicine_name="Metformin",
@@ -101,7 +101,7 @@ def test_prescription_tracker_lifecycle_end_to_end(client):
 
     history_resp = client.get(f"/patients/{p_id_str}/prescriptions")
     assert history_resp.status_code == 200
-    history_data = history_resp.json()
+    history_data = history_resp.json
     
     # Handle both flat list (A) and partitioned dict (B)
     if isinstance(history_data, dict):
@@ -119,24 +119,24 @@ def test_prescription_tracker_lifecycle_end_to_end(client):
         no_reason = client.patch(f"/prescriptions/{rx_id}/discontinue", json={})
     
     assert no_reason.status_code in (400, 422), no_reason.text
-    assert client.get(f"/prescriptions/{rx_id}").json()["status"] == "active"
+    assert client.get(f"/prescriptions/{rx_id}").json["status"] == "active"
 
     discontinue = client.patch(
         f"/prescriptions/{rx_id}/discontinue",
         json={"reason": "Patient experienced an adverse reaction"},
     )
     assert discontinue.status_code == 200, discontinue.text
-    discontinued = discontinue.json()
+    discontinued = discontinue.json
     assert discontinued["status"] == "discontinued"
     assert discontinued["id"] == rx_id
 
     # Verify immutability and retrieval
     again = client.get(f"/prescriptions/{rx_id}")
     assert again.status_code == 200
-    assert again.json()["status"] == "discontinued"
+    assert again.json["status"] == "discontinued"
 
     # Verify partitioning (Version B)
-    history_after = client.get(f"/patients/{p_id_str}/prescriptions").json()
+    history_after = client.get(f"/patients/{p_id_str}/prescriptions").json
     if isinstance(history_after, dict):
         active_ids = {rx["id"] for rx in history_after.get("active", [])}
         historical_ids = {rx["id"] for rx in history_after.get("historical", [])}
@@ -148,7 +148,7 @@ def test_prescription_tracker_lifecycle_end_to_end(client):
     # Verify audit trail (Version B)
     transitions_resp = client.get(f"/prescriptions/{rx_id}/transitions")
     if transitions_resp.status_code == 200:
-        transitions = transitions_resp.json()
+        transitions = transitions_resp.json
         assert len(transitions) >= 1
         assert any(t["to_status"] == "discontinued" and t["reason"] == "Patient experienced an adverse reaction" for t in transitions)
 
@@ -160,7 +160,7 @@ def test_prescription_tracker_lifecycle_end_to_end(client):
         bad_resp = client.post("/prescriptions", json=bad)
     assert bad_resp.status_code in (400, 422), bad_resp.text
     
-    all_rx_data = client.get(f"/patients/{p_id_str}/prescriptions").json()
+    all_rx_data = client.get(f"/patients/{p_id_str}/prescriptions").json
     if isinstance(all_rx_data, dict):
         names = {rx["medicine_name"] for rx in all_rx_data.get("active", [])} | {rx["medicine_name"] for rx in all_rx_data.get("historical", [])}
     else:
