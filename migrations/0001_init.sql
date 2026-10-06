@@ -11,6 +11,7 @@
 
 CREATE TABLE IF NOT EXISTS patients (
     id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
 
@@ -22,12 +23,12 @@ CREATE TABLE IF NOT EXISTS doctors (
 
 CREATE TABLE IF NOT EXISTS prescriptions (
     id                 TEXT PRIMARY KEY,
-    patient_id         TEXT NOT NULL REFERENCES patients(id),
-    doctor_id          TEXT NOT NULL REFERENCES doctors(id),
-    medicine_name      TEXT NOT NULL,
+    patient_id         TEXT NOT NULL REFERENCES patients(id) ON DELETE RESTRICT,
+    doctor_id          TEXT NOT NULL REFERENCES doctors(id) ON DELETE RESTRICT,
+    medicine_name      TEXT NOT NULL CHECK (medicine_name <> '' AND medicine_name IS NOT NULL),
     dosage_amount      REAL NOT NULL CHECK (dosage_amount > 0),
-    dosage_unit        TEXT NOT NULL,
-    frequency          TEXT NOT NULL,
+    dosage_unit        TEXT NOT NULL CHECK (dosage_unit <> '' AND dosage_unit IS NOT NULL),
+    frequency          TEXT NOT NULL CHECK (frequency <> '' AND frequency IS NOT NULL),
     start_date         TEXT NOT NULL,
     end_date           TEXT CHECK (end_date IS NULL OR end_date > start_date),
     status             TEXT NOT NULL DEFAULT 'active'
@@ -39,8 +40,8 @@ CREATE TABLE IF NOT EXISTS prescriptions (
 
 CREATE TABLE IF NOT EXISTS status_transitions (
     id              TEXT PRIMARY KEY,
-    prescription_id TEXT NOT NULL REFERENCES prescriptions(id),
-    from_status     TEXT NOT NULL,
+    prescription_id TEXT NOT NULL REFERENCES prescriptions(id) ON DELETE CASCADE,
+    from_status     TEXT NOT NULL CHECK (from_status IN ('active', 'completed', 'discontinued')),
     to_status       TEXT NOT NULL CHECK (to_status IN ('active', 'completed', 'discontinued')),
     reason          TEXT,
     transitioned_at TEXT NOT NULL
@@ -67,6 +68,9 @@ CREATE INDEX IF NOT EXISTS idx_rx_patient_status
 
 CREATE INDEX IF NOT EXISTS idx_rx_patient_start
     ON prescriptions(patient_id, start_date DESC);
+
+CREATE INDEX IF NOT EXISTS idx_st_prescription
+    ON status_transitions(prescription_id);
 
 CREATE INDEX IF NOT EXISTS idx_dose_logs_rx
     ON dose_logs(prescription_id, logged_at);
