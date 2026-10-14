@@ -1,0 +1,21 @@
+#!/bin/sh
+# Resolve a Python 3 interpreter and exec it with the same arguments.
+# This provides a bare `python` command for environments (e.g. Homebrew)
+# that only ship `python3`.
+#
+# Preference order:
+#   1. The repo's bundled virtualenv (.venv) when present — it carries the
+#      project's pinned dependencies (fastapi, httpx, uvicorn, pydantic,
+#      pytest) so `python -m pytest` works without a global install.
+#   2. The first system Python 3 on PATH.
+HERE=$(cd "$(dirname "$0")/.." && pwd)
+if [ -x "$HERE/.venv/bin/python" ]; then
+    exec "$HERE/.venv/bin/python" "$@"
+fi
+for candidate in python3.14 python3.13 python3.12 python3.11 python3.10 python3; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+        exec "$candidate" "$@"
+    fi
+done
+echo "python: no Python 3 interpreter found on PATH" >&2
+exit 127
