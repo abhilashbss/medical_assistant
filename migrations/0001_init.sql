@@ -8,49 +8,54 @@
 --   * Prescription rows are immutable after creation; the only permitted
 --     mutations are explicit status transitions recorded in
 --     status_transitions. Discontinuation requires a reason.
+-- Idempotent: uses IF NOT EXISTS so it can be re-run on an existing database.
+
+PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS patients (
     id         TEXT PRIMARY KEY,
-    created_at TEXT NOT NULL
+    name       TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 );
 
 CREATE TABLE IF NOT EXISTS doctors (
     id         TEXT PRIMARY KEY,
     name       TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 );
 
 CREATE TABLE IF NOT EXISTS prescriptions (
     id                 TEXT PRIMARY KEY,
-    patient_id         TEXT NOT NULL REFERENCES patients(id),
-    doctor_id          TEXT NOT NULL REFERENCES doctors(id),
+    patient_id         TEXT NOT NULL REFERENCES patients(id) ON DELETE RESTRICT,
+    doctor_id          TEXT NOT NULL REFERENCES doctors(id) ON DELETE RESTRICT,
     medicine_name      TEXT NOT NULL,
     dosage_amount      REAL NOT NULL CHECK (dosage_amount > 0),
-    dosage_unit        TEXT NOT NULL,
+    dosage_unit        TEXT NOT NULL CHECK (length(dosage_unit) > 0),
     frequency          TEXT NOT NULL,
     start_date         TEXT NOT NULL,
     end_date           TEXT CHECK (end_date IS NULL OR end_date > start_date),
     status             TEXT NOT NULL DEFAULT 'active'
                        CHECK (status IN ('active', 'completed', 'discontinued')),
     discontinue_reason TEXT,
-    created_at         TEXT NOT NULL,
+    created_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
     updated_at         TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS status_transitions (
     id              TEXT PRIMARY KEY,
-    prescription_id TEXT NOT NULL REFERENCES prescriptions(id),
-    from_status     TEXT NOT NULL,
+    prescription_id TEXT NOT NULL REFERENCES prescriptions(id) ON DELETE RESTRICT,
+    from_status     TEXT NOT NULL CHECK (from_status IN ('active', 'completed', 'discontinued')),
     to_status       TEXT NOT NULL CHECK (to_status IN ('active', 'completed', 'discontinued')),
     reason          TEXT,
-    transitioned_at TEXT NOT NULL
+    transitioned_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 );
 
 CREATE TABLE IF NOT EXISTS dose_logs (
     id              TEXT PRIMARY KEY,
-    prescription_id TEXT NOT NULL REFERENCES prescriptions(id),
+    prescription_id TEXT NOT NULL REFERENCES prescriptions(id) ON DELETE RESTRICT,
     event           TEXT NOT NULL CHECK (event IN ('taken', 'skipped')),
-    logged_at       TEXT NOT NULL
+    logged_at       TEXT NOT NULL,
+    notes           TEXT
 );
 
 -- One active prescription per medicine per patient. Historical

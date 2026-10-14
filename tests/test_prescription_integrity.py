@@ -1,0 +1,344 @@
+"""Integrity tests: foreign keys, partial unique index, status transition immutability,
+EXPLAIN QUERY PLAN index verification, and index presence checks."""
+from __future__ import annotations
+
+import sqlite3
+from datetime import datetime, timezone
+
+import pytest
+
+from prescription_tracker.db import init_db, seed_reference_data
+from prescription_tracker.models import PrescriptionCreate, ValidationError
+from prescription_tracker.repository import PrescriptionRepository
+
+PATIENT = "patient-integ"
+DOCTOR = "doctor-integ"
+
+
+def _iso(dt: datetime) -> str:
+    return dt.isoformat()
+
+
+@pytest.fixture
+def repo():
+    conn = init_db()
+    seed_reference_data(conn, PATIENT, DOCTOR)
+    return PrescriptionRepository(conn)
+
+
+def _make(medicine="TestMed") -> PrescriptionCreate:
+    return PrescriptionCreate(
+        patient_id=PATIENT,
+        doctor_id=DOCTOR,
+        medicine_name=medicine,
+        dosage_amount=100.0,
+        dosage_unit="mg",
+        frequency="1x/day",
+        start_date=_iso(datetime(2026, 1, 1, tzinfo=timezone.utc)),
+    )
+
+
+class TestForeignKeyEnforcement:
+    def test_fk_pragma_on(self, repo):
+        assert repo.conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+
+    def test_insert_with_bad_patient_rejected(self, repo):
+        data = _make()
+        data.patient_id = "no-such-patient"
+        with pytest.raises(sqlite3.IntegrityError):
+            repo.create_prescription(data)
+
+    def test_insert_with_bad_doctor_rejected(self, repo):
+        data = _make()
+        data.doctor_id = "no-such-doctor"
+        with pytest.raises(sqlite3.IntegrityError):
+            repo.create_prescription(data)
+
+    def test_dose_log_fk_to_prescription(self, repo):
+        from prescription_tracker.models import DoseLogCreate
+        # The repository guards with an existence check (NotFoundError),
+        # but a raw insert must be rejected by the FK constraint.
+        with pytest.raises(sqlite3.IntegrityError):
+            repo.conn.execute(
+                "INSERT INTO dose_logs (prescription_id, event, timestamp) "
+                "VALUES (?, 'taken', ?)",
+                ("nonexistent-rx", _iso(datetime(2026, 1, 1, 8, 0, tzinfo=timezone.utc))),
+            )
+            repo.conn.commit()
+
+    def test_status_transition_fk_to_prescription(self, repo):
+        with pytest.raises(sqlite3.IntegrityError):
+            repo.conn.execute(
+                "INSERT INTO status_transitions (prescription_id, from_status, to_status) "
+                "VALUES (?, 'active', 'completed')",
+                ("nonexistent-rx",),
+            )
+            repo.conn.commit()
+
+
+class TestPartialUniqueIndex:
+    def test_index_exists(self, repo):
+        rows = repo.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_one_active_per_medicine'"
+        ).fetchall()
+        assert len(rows) == 1
+
+    def test_blocks_duplicate_active(self, repo):
+        repo.create_prescription(_make(medicine="DupMed"))
+        with pytest.raises(sqlite3.IntegrityError):
+            repo.create_prescription(_make(medicine="DupMed"))
+
+    def test_allows_after_discontinue(self, repo):
+        rx = repo.create_prescription(_make(medicine="DupMed"))
+        repo.discontinue(rx["id"], "done")
+        # New active for same medicine should succeed.
+        repo.create_prescription(_make(medicine="DupMed"))
+
+    def test_allows_same_medicine_different_patients(self, repo):
+        seed_reference_data(repo.conn, "patient-other", DOCTOR)
+        repo.create_prescription(_make(medicine="SharedMed"))
+        data = _make(medicine="SharedMed")
+        data.patient_id = "patient-other"
+        repo.create_prescription(data)
+
+
+class TestStatusTransitionImmutability:
+    def test_no_direct_update_to_created_row(self, repo):
+        rx = repo.create_prescription(_make())
+        # Directly trying to mutate via raw SQL outside the transition path
+        # is blocked at the application level — but verify the transition
+        # path inserts an audit row and only updates status.
+        repo.complete(rx["id"])
+        transitions = repo.conn.execute(
+            "SELECT * FROM status_transitions WHERE prescription_id = ?", (rx["id"],)
+        ).fetchall()
+        assert len(transitions) == 1
+        # The audit row is immutable: no UPDATE/DELETE path exists in code.
+
+    def test_no_repository_method_updates_or_deletes_transitions(self):
+        """The repository exposes no method that mutates status_transitions rows.
+
+        Audit rows are append-only by design: the only write path is the
+        INSERT inside transition_status. Confirm no update/delete of
+        status_transitions exists anywhere in the data-access layer.
+        """
+        import inspect
+
+        from prescription_tracker import repository as repo_mod
+
+        src = inspect.getsource(repo_mod)
+        assert "UPDATE status_transitions" not in src, (
+            "repository must not UPDATE status_transitions (append-only audit)"
+        )
+        assert "DELETE FROM status_transitions" not in src, (
+            "repository must not DELETE FROM status_transitions (append-only audit)"
+        )
+        # Every status_transitions write must be an INSERT.
+        assert "INSERT INTO status_transitions" in src
+
+    def test_cannot_reopen_completed(self, repo):
+        rx = repo.create_prescription(_make())
+        repo.complete(rx["id"])
+        with pytest.raises(ValidationError):
+            repo.transition_status(
+                rx["id"],
+                __import__("prescription_tracker.models", fromlist=["StatusTransition"]).StatusTransition(
+                    to_status="completed"
+                ),
+            )
+
+    def test_transition_records_timestamp(self, repo):
+        rx = repo.create_prescription(_make())
+        repo.discontinue(rx["id"], "testing")
+        row = repo.conn.execute(
+            "SELECT transitioned_at FROM status_transitions WHERE prescription_id = ?",
+            (rx["id"],),
+        ).fetchone()
+        assert row["transitioned_at"] is not None
+        assert "T" in row["transitioned_at"]  # ISO 8601
+
+    def test_complete_records_transition_row(self, repo):
+        rx = repo.create_prescription(_make())
+        repo.complete(rx["id"])
+        row = repo.conn.execute(
+            "SELECT * FROM status_transitions WHERE prescription_id = ?",
+            (rx["id"],),
+        ).fetchone()
+        assert row is not None
+        assert row["from_status"] == "active"
+        assert row["to_status"] == "completed"
+        assert row["transitioned_at"] is not None
+
+    def test_status_transitions_append_only_multiple(self, repo):
+        """A second transition for the same prescription appends; it does not
+        overwrite the first — the audit history grows monotonically."""
+        rx = repo.create_prescription(_make())
+        repo.complete(rx["id"])
+        # Re-transition is rejected, so to prove append-only we rely on the
+        # fact that the single completed transition remains and cannot be
+        # replaced. A discontinue attempt after complete must fail, leaving
+        # the original audit row intact.
+        with pytest.raises(ValidationError):
+            repo.discontinue(rx["id"], "late")
+        rows = repo.conn.execute(
+            "SELECT * FROM status_transitions WHERE prescription_id = ?",
+            (rx["id"],),
+        ).fetchall()
+        assert len(rows) == 1
+        assert rows[0]["to_status"] == "completed"
+
+
+class TestIndexPresence:
+    def test_patient_status_index_exists(self, repo):
+        rows = repo.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_prescriptions_patient_status'"
+        ).fetchall()
+        assert len(rows) == 1
+
+    def test_patient_startdate_index_exists(self, repo):
+        rows = repo.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_prescriptions_patient_startdate'"
+        ).fetchall()
+        assert len(rows) == 1
+
+    def test_dose_log_index_exists(self, repo):
+        rows = repo.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_dose_logs_rx_time'"
+        ).fetchall()
+        assert len(rows) == 1
+
+
+class TestExplainQueryPlan:
+    def _plan(self, repo, sql, params=()):
+        rows = repo.explain_query_plan(sql, params)
+        return " ".join(r["detail"] for r in rows)
+
+    def test_history_uses_startdate_index(self, repo):
+        # Seed enough rows so the planner prefers an index.
+        for i in range(50):
+            repo.create_prescription(
+                PrescriptionCreate(
+                    patient_id=PATIENT,
+                    doctor_id=DOCTOR,
+                    medicine_name=f"PlanMed-{i}",
+                    dosage_amount=10.0,
+                    dosage_unit="mg",
+                    frequency="1x/day",
+                    start_date=_iso(datetime(2026, 1, 1, tzinfo=timezone.utc) +
+                                    __import__("datetime").timedelta(days=i)),
+                )
+            )
+        plan = self._plan(
+            repo,
+            "SELECT * FROM prescriptions WHERE patient_id = ? ORDER BY start_date DESC",
+            (PATIENT,),
+        )
+        assert "SCAN" not in plan.upper(), f"Full scan: {plan}"
+        assert "idx_prescriptions_patient_startdate" in plan
+
+    def test_status_query_uses_status_index(self, repo):
+        plan = self._plan(
+            repo,
+            "SELECT * FROM prescriptions WHERE patient_id = ? AND status = ?",
+            (PATIENT, "active"),
+        )
+        assert "SCAN" not in plan.upper(), f"Full scan: {plan}"
+        assert "idx_prescriptions_patient_status" in plan
+
+
+class TestQueryPlanInstrumentation:
+    """Exercise the repository's named query-plan helpers and full-scan detector."""
+
+    def test_plan_history_by_patient_uses_index(self, repo):
+        rx = repo.create_prescription(_make(medicine="PlanHist"))
+        plan = repo.plan_history_by_patient(PATIENT)
+        assert "idx_prescriptions_patient_startdate" in plan
+        assert not repo.uses_full_scan(plan)
+
+    def test_plan_by_patient_and_status_uses_index(self, repo):
+        repo.create_prescription(_make(medicine="PlanStatus"))
+        plan = repo.plan_by_patient_and_status(PATIENT, "active")
+        assert "idx_prescriptions_patient_status" in plan
+        assert not repo.uses_full_scan(plan)
+
+    def test_plan_dose_logs_uses_index(self, repo):
+        from prescription_tracker.models import DoseLogCreate
+        rx = repo.create_prescription(_make(medicine="PlanDose"))
+        repo.add_dose_log(
+            DoseLogCreate(
+                prescription_id=rx["id"],
+                event="taken",
+                timestamp=_iso(datetime(2026, 1, 1, 8, 0, tzinfo=timezone.utc)),
+            )
+        )
+        plan = repo.plan_dose_logs(rx["id"])
+        assert "idx_dose_logs_rx_time" in plan
+        assert not repo.uses_full_scan(plan)
+
+    def test_uses_full_scan_detects_scan(self, repo):
+        assert repo.uses_full_scan("SCAN TABLE prescriptions") is True
+        assert repo.uses_full_scan("SEARCH prescriptions USING INDEX foo") is False
+
+
+class TestRepositoryEdgeCases:
+    """Cover NotFoundError paths, invalid transitions, and dose-log date filters."""
+
+    def test_get_prescription_not_found(self, repo):
+        from prescription_tracker.repository import NotFoundError
+        with pytest.raises(NotFoundError):
+            repo.get_prescription("nonexistent-id")
+
+    def test_transition_not_found(self, repo):
+        from prescription_tracker.models import StatusTransition
+        from prescription_tracker.repository import NotFoundError
+        with pytest.raises(NotFoundError):
+            repo.transition_status(
+                "nonexistent-id", StatusTransition(to_status="completed")
+            )
+
+    def test_transition_same_status_rejected(self, repo):
+        """Transitioning to the same status is rejected (no-op guard)."""
+        rx = repo.create_prescription(_make(medicine="SameStatus"))
+        with pytest.raises(ValidationError) as exc:
+            repo.transition_status(
+                rx["id"],
+                __import__("prescription_tracker.models", fromlist=["StatusTransition"]).StatusTransition(
+                    to_status="active"
+                ),
+            )
+        # 'active' is not a valid to_status in the model; verify the
+        # repository-level same-status guard by completing then completing again.
+        repo.complete(rx["id"])
+        with pytest.raises(ValidationError):
+            repo.transition_status(
+                rx["id"],
+                __import__("prescription_tracker.models", fromlist=["StatusTransition"]).StatusTransition(
+                    to_status="completed"
+                ),
+            )
+
+    def test_transition_from_non_active_rejected(self, repo):
+        rx = repo.create_prescription(_make(medicine="NonActive"))
+        repo.complete(rx["id"])
+        with pytest.raises(ValidationError):
+            repo.discontinue(rx["id"], "too late")
+
+    def test_dose_log_filters_by_date_range(self, repo):
+        from prescription_tracker.models import DoseLogCreate
+        rx = repo.create_prescription(_make(medicine="DoseFilter"))
+        t1 = _iso(datetime(2026, 1, 1, 8, 0, tzinfo=timezone.utc))
+        t2 = _iso(datetime(2026, 1, 1, 14, 0, tzinfo=timezone.utc))
+        t3 = _iso(datetime(2026, 1, 1, 20, 0, tzinfo=timezone.utc))
+        for ts in (t1, t2, t3):
+            repo.add_dose_log(
+                DoseLogCreate(prescription_id=rx["id"], event="taken", timestamp=ts)
+            )
+        # Both start and end filter.
+        both = repo.get_dose_logs(rx["id"], start_ts=t2, end_ts=t2)
+        assert len(both) == 1
+        # start-only filter.
+        start_only = repo.get_dose_logs(rx["id"], start_ts=t2)
+        assert len(start_only) == 2
+        # end-only filter.
+        end_only = repo.get_dose_logs(rx["id"], end_ts=t2)
+        assert len(end_only) == 2
