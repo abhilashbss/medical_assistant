@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyc
+
+# Virtual environments
+.venv/
+venv/
+
+# Test / coverage artifacts
+.coverage
+.pytest_cache/
+htmlcov/
+
+# Local SQLite databases
+*.db
+medication_tracker/medication_tracker.db
+
+# E2E transcript artifacts (regenerated each gate run)
+.see/e2e-artifacts/
