@@ -28,10 +28,10 @@ CREATE TABLE IF NOT EXISTS prescriptions (
     id                 TEXT PRIMARY KEY,
     patient_id         TEXT NOT NULL REFERENCES patients(id) ON DELETE RESTRICT,
     doctor_id          TEXT NOT NULL REFERENCES doctors(id) ON DELETE RESTRICT,
-    medicine_name      TEXT NOT NULL,
+    medicine_name      TEXT NOT NULL CHECK (medicine_name <> '' AND medicine_name IS NOT NULL),
     dosage_amount      REAL NOT NULL CHECK (dosage_amount > 0),
-    dosage_unit        TEXT NOT NULL CHECK (length(dosage_unit) > 0),
-    frequency          TEXT NOT NULL,
+    dosage_unit        TEXT NOT NULL CHECK (length(dosage_unit) > 0 AND dosage_unit <> ''),
+    frequency          TEXT NOT NULL CHECK (frequency <> '' AND frequency IS NOT NULL),
     start_date         TEXT NOT NULL,
     end_date           TEXT CHECK (end_date IS NULL OR end_date > start_date),
     status             TEXT NOT NULL DEFAULT 'active'
@@ -75,3 +75,6 @@ CREATE INDEX IF NOT EXISTS idx_rx_patient_start
 
 CREATE INDEX IF NOT EXISTS idx_dose_logs_rx
     ON dose_logs(prescription_id, logged_at);
+
+CREATE INDEX IF NOT EXISTS idx_st_prescription 
+    ON status_transitions(prescription_id);
