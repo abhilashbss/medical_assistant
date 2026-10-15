@@ -237,10 +237,9 @@ class TestExplainQueryPlan:
 def api_client(seeded_repo):
     """Point the FastAPI app at the seeded repository's connection."""
     repo, _ = seeded_repo
-    import prescription_tracker.app as appmod
-
-    appmod._conn = repo.conn
-    appmod._repo = repo
+    import prescription_tracker.state as state
+    state.conn = repo.conn
+    state.repo = repo
     return ASGIClient(app)
 
 

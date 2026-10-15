@@ -219,8 +219,8 @@ class TestEvidenceCapture:
         from prescription_tracker.repository import PrescriptionRepository
 
         conn = init_db()
-        monkeypatch.setattr("prescription_tracker.app._conn", conn)
-        monkeypatch.setattr("prescription_tracker.app._repo", PrescriptionRepository(conn))
+        monkeypatch.setattr("prescription_tracker.state.conn", conn)
+        monkeypatch.setattr("prescription_tracker.state.repo", PrescriptionRepository(conn))
         client = ASGIClient(app)
 
         artifacts = Path(__file__).resolve().parents[2] / ".see" / "e2e-artifacts"

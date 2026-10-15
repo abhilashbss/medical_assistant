@@ -22,8 +22,8 @@ def _iso(dt: datetime) -> str:
 def client(monkeypatch):
     # Fresh in-memory DB for each test.
     conn = init_db()
-    monkeypatch.setattr("prescription_tracker.app._conn", conn)
-    monkeypatch.setattr("prescription_tracker.app._repo", PrescriptionRepository(conn))
+    monkeypatch.setattr("prescription_tracker.state.conn", conn)
+    monkeypatch.setattr("prescription_tracker.state.repo", PrescriptionRepository(conn))
     return ASGIClient(app)
 
 
