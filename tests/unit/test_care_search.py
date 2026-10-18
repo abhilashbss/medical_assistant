@@ -56,7 +56,7 @@ def test_insurance_api_integration_identifies_network_status(db_session):
     assert result is True
 
     plan_out = NetworkPlan(plan_name="HMO Basic", carrier=carrier, plan_type="HMO", tier="Bronze")
-    db_session.add(plan_out)
+    db_session.add_all([plan_out])
     db_session.commit()
 
     result_out = db_session.execute(stmt, {"p": provider.id, "pl": plan_out.id}).scalar()
@@ -99,3 +99,29 @@ def test_api_gateway_handles_timeouts_without_crashing():
         pass
     except Exception as e:
         pytest.fail(f"Unexpected exception type: {type(e)}")
+
+def test_phi_encryption(db_session):
+    """Verify that PHIColumn automatically encrypts and decrypts data."""
+    from sqlalchemy import Column, Integer, String
+    from sqlalchemy.orm import declarative_base
+
+    TestBase = declarative_base()
+    class PatientRecord(TestBase):
+        __tablename__ = 'patient_records'
+        id = Column(Integer, primary_key=True)
+        ssn = Column(PHIColumn())
+
+    engine = db_session.get_bind()
+    TestBase.metadata.create_all(engine)
+
+    record = PatientRecord(ssn="123-45-6789")
+    db_session.add(record)
+    db_session.commit()
+
+    raw_data = db_session.execute(text("SELECT ssn FROM patient_records")).scalar()
+    assert raw_data != "123-45-6789"
+
+    fetched_record = db_session.query(PatientRecord).first()
+    assert fetched_record.ssn == "123-45-6789"
+
+    TestBase.metadata.drop_all(engine)
