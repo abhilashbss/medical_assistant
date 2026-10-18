@@ -113,6 +113,6 @@ def verify_network_status(provider_id: str, insurance_carrier: str, plan_type: s
         )
         response = _client.verify_network_status(request)
         return response.status
-    except Exception as e:
-        logger.error(f"Unexpected error in verify_network_status: {str(e)}")
+    except Exception:
+        logger.error("Unexpected error in verify_network_status: internal verification failure")
         return "Out-of-Network"
