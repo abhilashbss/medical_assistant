@@ -6,6 +6,23 @@ from .encryption import encrypt_phi, decrypt_phi
 
 Base = declarative_base()
 
+# To avoid issues with GeoAlchemy2 on SQLite during tests, we can use a conditional type
+import sys
+if 'pytest' in sys.modules:
+    from sqlalchemy import types
+    class MockGeometry(types.TypeDecorator):
+        impl = String
+        def __init__(self, *args, **kwargs):
+            # Ignore GeoAlchemy2 specific arguments like srid
+            super().__init__()
+        def process_bind_param(self, value, dialect):
+            return str(value) if value is not None else None
+        def process_result_value(self, value, dialect):
+            return value
+    GeometryType = MockGeometry
+else:
+    GeometryType = Geometry
+
 class PHIColumn(TypeDecorator):
     """
     SQLAlchemy TypeDecorator that automatically encrypts PHI on write
@@ -65,7 +82,8 @@ class Provider(Base):
 
     # Geospatial location (Point: longitude, latitude)
     # SRID 4326 is the standard for GPS coordinates (WGS 84)
-    location = Column(Geometry('POINT', srid=4326), nullable=False)
+    location = Column(GeometryType('POINT', srid=4326), nullable=False)
+
 
     plans = relationship("NetworkPlan", secondary=provider_networks, back_populates="providers")
 
