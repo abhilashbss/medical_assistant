@@ -66,5 +66,6 @@ class HIPAATransport:
             response.raise_for_status()
             return response
         except requests.exceptions.RequestException as e:
-            logger.error(f"Request failed: {type(e).__name__}")
+            # Ensure we don't log the exception if it contains PHI (rare for RequestException but safe)
+            logger.error(f"Request failed for {parsed.hostname}: {type(e).__name__}")
             raise e
