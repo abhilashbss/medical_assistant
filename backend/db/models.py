@@ -83,6 +83,7 @@ class Provider(Base):
     # Geospatial location (Point: longitude, latitude)
     # SRID 4326 is the standard for GPS coordinates (WGS 84)
     location = Column(GeometryType('POINT', srid=4326), nullable=False)
+    rating = Column(Integer, nullable=False, default=0)
 
 
     plans = relationship("NetworkPlan", secondary=provider_networks, back_populates="providers")

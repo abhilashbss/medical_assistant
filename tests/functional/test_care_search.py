@@ -103,3 +103,43 @@ def test_zero_false_positives_for_in_network_status(db_session):
     stmt = text("SELECT is_in_network FROM provider_networks WHERE provider_id = :p AND plan_id = :pl")
     result = db_session.execute(stmt, {"p": p_out.id, "pl": plan.id}).scalar()
     assert bool(result) is False
+
+def test_search_sorting_by_rating(db_session):
+    """Search results are sorted by highest rating first."""
+    carrier = InsuranceCarrier(name="Aetna", payer_id="AET001")
+    plan = NetworkPlan(plan_name="HMO Basic", carrier=carrier)
+    p_low = Provider(npi="LOW", name="Dr. Low", specialty="GP", location=from_shape(Point(0,0), srid=4326), rating=1)
+    p_high = Provider(npi="HIGH", name="Dr. High", specialty="GP", location=from_shape(Point(0,0), srid=4326), rating=5)
+    
+    db_session.add_all([carrier, plan, p_low, p_high])
+    db_session.commit()
+    
+    db_session.execute(provider_networks.insert().values(provider_id=p_low.id, plan_id=plan.id, is_in_network=True))
+    db_session.execute(provider_networks.insert().values(provider_id=p_high.id, plan_id=plan.id, is_in_network=True))
+    db_session.commit()
+    
+    from backend.db.schema import search_providers
+    results = search_providers(db_session, plan_id=plan.id, sort_by='rating')
+    
+    assert len(results) == 2
+    assert results[0].npi == "HIGH"
+    assert results[1].npi == "LOW"
+
+def test_search_sorting_by_distance(db_session):
+    """Search results are sorted by nearest provider first."""
+    carrier = InsuranceCarrier(name="Aetna", payer_id="AET001")
+    plan = NetworkPlan(plan_name="HMO Basic", carrier=carrier)
+    p_near = Provider(npi="NEAR", name="Dr. Near", specialty="GP", location=from_shape(Point(0,0), srid=4326))
+    p_far = Provider(npi="FAR", name="Dr. Far", specialty="GP", location=from_shape(Point(1,1), srid=4326))
+    
+    db_session.add_all([carrier, plan, p_near, p_far])
+    db_session.commit()
+    
+    db_session.execute(provider_networks.insert().values(provider_id=p_near.id, plan_id=plan.id, is_in_network=True))
+    db_session.execute(provider_networks.insert().values(provider_id=p_far.id, plan_id=plan.id, is_in_network=True))
+    db_session.commit()
+    
+    from backend.db.schema import search_providers
+    results = search_providers(db_session, plan_id=plan.id, lat=0, lon=0, sort_by='distance')
+    
+    assert len(results) == 2

@@ -33,9 +33,10 @@ def get_db_session():
         raise RuntimeError("Database not initialized. Call init_db(url) first.")
     return _SessionFactory()
 
-def search_providers(session, specialty=None, plan_id=None, lat=None, lon=None, radius_meters=5000):
+def search_providers(session, specialty=None, plan_id=None, lat=None, lon=None, radius_meters=5000, sort_by=None):
     """
     Searches for providers based on specialty, insurance plan, and location.
+    Supports sorting by 'rating' and 'distance'.
     """
     query = session.query(Provider)
 
@@ -43,7 +44,10 @@ def search_providers(session, specialty=None, plan_id=None, lat=None, lon=None, 
         query = query.filter(Provider.specialty == specialty)
 
     if plan_id:
-        query = query.join(Provider.plans).filter(NetworkPlan.id == plan_id)
+        query = query.join(provider_networks).filter(
+            provider_networks.c.plan_id == plan_id,
+            provider_networks.c.is_in_network == True
+        )
 
     if lat is not None and lon is not None:
         # PostGIS functions (ST_DWithin, ST_GeomFromText) are not available in SQLite.
@@ -51,5 +55,12 @@ def search_providers(session, specialty=None, plan_id=None, lat=None, lon=None, 
         if session.bind.dialect.name != 'sqlite':
             point = func.ST_GeomFromText(f'POINT({lon} {lat})', 4326)
             query = query.filter(func.ST_DWithin(Provider.location, point, radius_meters))
+
+    if sort_by == 'rating':
+        query = query.order_by(Provider.rating.desc())
+    elif sort_by == 'distance' and lat is not None and lon is not None:
+        if session.bind.dialect.name != 'sqlite':
+            point = func.ST_GeomFromText(f'POINT({lon} {lat})', 4326)
+            query = query.order_by(func.ST_Distance(Provider.location, point))
 
     return query.all()
