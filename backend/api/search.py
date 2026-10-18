@@ -1,24 +1,6 @@
 from typing import List, Optional
 from flask import Flask, request, jsonify
-from geopy.distance import geodesic
-
-try:
-    from backend.db.schema import Provider, get_db_session
-except ImportError:
-    try:
-        from .see.mocks.backend.db.schema import Provider, get_db_session
-    except (ImportError, ValueError):
-        # Absolute path fallback for mock imports in this environment
-        import importlib.util
-        import os
-
-        root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-        mock_path = os.path.join(root_dir, ".see/mocks/backend/db/schema.py")
-        spec = importlib.util.spec_from_file_location("backend.db.schema", mock_path)
-        mock_module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mock_module)
-        Provider = mock_module.Provider
-        get_db_session = mock_module.get_db_session
+from backend.services.geospatial import geospatial_service
 
 app = Flask(__name__)
 
@@ -28,35 +10,19 @@ def find_providers_by_radius(
     radius_km: float,
     specialty: Optional[str] = None,
     query: Optional[str] = None
-) -> List[Provider]:
+) -> List[Any]:
     """
     Finds providers within a specified radius, filtered by specialty and name query.
     Returns providers sorted by proximity.
     """
-    session = get_db_session()
-    all_providers = session.query(Provider).all()
-
-    results = []
-    center = (lat, lng)
-
-    for provider in all_providers:
-        # Geospatial distance check
-        dist = geodesic(center, provider.location).km
-        if dist <= radius_km:
-            # Specialty filter
-            if specialty and provider.specialty.lower() != specialty.lower():
-                continue
-
-            # Name query filter
-            if query and query.lower() not in provider.name.lower():
-                continue
-
-            results.append((dist, provider))
-
-    # Sort by distance (ascending)
-    results.sort(key=lambda x: x[0])
-
-    return [p for dist, p in results]
+    results = geospatial_service.find_nearby_providers(
+        lat=lat,
+        lng=lng,
+        radius_km=radius_km,
+        specialty=specialty,
+        query=query
+    )
+    return [p for p, dist in results]
 
 @app.route('/providers/search', methods=['GET'])
 def search_providers():
