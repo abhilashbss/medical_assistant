@@ -13,7 +13,6 @@ except ImportError:
     except ImportError:
         # This is for when the mock is literally at .see/mocks/backend/integrations/insurance_client.py
         # but we want to import it as if it were in the backend package.
-        # We can just import the module directly using importlib.
         import importlib.util
         spec = importlib.util.spec_from_file_location("backend.integrations.insurance_client",
                                                      os.path.join(mock_path, 'backend', 'integrations', 'insurance_client.py'))
@@ -30,20 +29,15 @@ def filter_in_network_providers(providers, insurance_plan):
     for the given insurance plan.
 
     Providers returning 'out-of-network' or 'unverified' are discarded.
-    If the verification API is unreachable, the provider is treated as out-of-network.
+    If the verification API is unreachable, the error is propagated so the UI can
+    display a graceful error message (Workflow 3).
     """
     filtered = []
     for provider in providers:
-        try:
-            status = verify_network_status(provider['id'], insurance_plan)
-            if status == 'in-network':
-                filtered.append(provider)
-        except Exception as e:
-            # HIPAA compliance: do not log PHI (like provider_id if it's sensitive,
-            # though usually IDs are fine, but we avoid logging the insurance_plan
-            # and specific patient-provider links in detail).
-            logger.error("Insurance verification API failure: %s", str(e))
-            # Fallback: treat as out-of-network
-            continue
+        # We do not catch InsuranceVerificationError here because it must propagate
+        # to the API layer to trigger the 'Unable to verify' UI notification.
+        status = verify_network_status(provider['id'], insurance_plan)
+        if status.lower() == 'in-network':
+            filtered.append(provider)
 
     return filtered

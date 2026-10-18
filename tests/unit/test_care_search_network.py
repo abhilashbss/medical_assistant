@@ -42,9 +42,12 @@ def test_geospatial_radius_filtering():
             assert len(results) > 0
 
 def test_verification_failure_fallback():
-    """Verification logic handles API timeouts or failures with appropriate fallback errors."""
+    """Verification logic propagates API failures so the UI can display a graceful error message"""
     with patch('backend.services.filter_logic.verify_network_status') as mock_verify:
+        # Mock the verification to raise an error
         mock_verify.side_effect = Exception("API Timeout")
         providers = [{"id": "p1"}]
-        results = filter_in_network_providers(providers, "Plan-A")
-        assert results == []
+
+        # Now expect the exception to propagate instead of silently returning []
+        with pytest.raises(Exception):
+            filter_in_network_providers(providers, "Plan-A")
