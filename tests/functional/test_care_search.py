@@ -1,68 +1,82 @@
 import pytest
-import time
 from unittest.mock import patch
-from backend.logic.filtering import filter_and_rank_providers
+from backend.logic.ranking import filter_and_rank_providers
 
-@pytest.fixture
-def search_ctx():
-    return {"lat": 40.7128, "lon": -74.0060, "insurance_plan": "PPO_PLAN", "radius": 10}
-
-def test_insurance_carrier_plan_filtering(search_ctx):
+def test_insurance_carrier_and_plan_filtering():
     """Providers are filtered correctly by insurance carrier and plan type."""
-    with patch('backend.logic.filtering.find_providers_by_radius') as mock_find, \
-         patch('backend.logic.filtering.verify_network_status') as mock_verify:
+    providers = [
+        {"id": "p1", "name": "Dr. InNet", "rating": 4.0, "distance": 1.0},
+        {"id": "p2", "name": "Dr. OutNet", "rating": 4.0, "distance": 0.5},
+    ]
 
-        mock_find.return_value = [{"id": 1, "name": "Dr A"}, {"id": 2, "name": "Dr B"}]
-        mock_verify.side_effect = lambda p_id, plan: "in-network" if p_id == 1 else "out-of-network"
+    def mock_find(*args, **kwargs): return providers
+    def mock_verify(pid, plan):
+        if plan == "PLAN_GOLD" and pid == "p1": return "in-network"
+        return "out-of-network"
 
-        results = filter_and_rank_providers(search_ctx["lat"], search_ctx["lon"], search_ctx["radius"], search_ctx["insurance_plan"])
+    with patch('backend.logic.ranking.find_providers_by_radius', side_effect=mock_find), \
+         patch('backend.logic.ranking.verify_network_status', side_effect=mock_verify):
+
+        results = filter_and_rank_providers(0, 0, 10, "PLAN_GOLD")
         assert len(results) == 1
-        assert results[0]["id"] == 1
+        assert results[0]["id"] == "p1"
 
-def test_search_returns_only_in_network(search_ctx):
+def test_search_returns_only_in_network():
     """Search results return only 'in-network' providers for selected insurance."""
-    with patch('backend.logic.filtering.find_providers_by_radius') as mock_find, \
-         patch('backend.logic.filtering.verify_network_status') as mock_verify:
+    providers = [
+        {"id": "p1", "name": "InNet 1", "rating": 4.0, "distance": 1.0},
+        {"id": "p2", "name": "InNet 2", "rating": 4.0, "distance": 2.0},
+        {"id": "p3", "name": "OutNet", "rating": 5.0, "distance": 0.1},
+    ]
 
-        mock_find.return_value = [{"id": 1, "name": "Dr A"}, {"id": 2, "name": "Dr B"}]
-        mock_verify.side_effect = lambda p_id, plan: "in-network" if p_id == 1 else "out-of-network"
+    def mock_find(*args, **kwargs): return providers
+    def mock_verify(pid, plan):
+        return "in-network" if pid in ["p1", "p2"] else "out-of-network"
 
-        results = filter_and_rank_providers(search_ctx["lat"], search_ctx["lon"], search_ctx["radius"], search_ctx["insurance_plan"])
-        assert all(p["id"] == 1 for p in results)
+    with patch('backend.logic.ranking.find_providers_by_radius', side_effect=mock_find), \
+         patch('backend.logic.ranking.verify_network_status', side_effect=mock_verify):
 
-def test_geospatial_radius_filtering(search_ctx):
+        results = filter_and_rank_providers(0, 0, 10, "PLAN_ABC")
+        for p in results:
+            assert p["id"] != "p3"
+        assert len(results) == 2
+
+def test_geospatial_radius_functional():
     """Geospatial search returns providers within the specified radius."""
-    with patch('backend.logic.filtering.find_providers_by_radius') as mock_find, \
-         patch('backend.logic.filtering.verify_network_status') as mock_verify:
+    with patch('backend.logic.ranking.find_providers_by_radius') as mock_find, \
+         patch('backend.logic.ranking.verify_network_status', return_value="in-network"):
 
-        mock_find.return_value = [{"id": 1, "name": "Dr A", "distance": 1.0, "rating": 4.0}]
-        mock_verify.return_value = "in-network"
+        mock_find.return_value = [{"id": "p1", "rating": 4.0, "distance": 1.0}]
+        filter_and_rank_providers(40.7, -74.0, 5.0, "PLAN_X")
 
-        results = filter_and_rank_providers(search_ctx["lat"], search_ctx["lon"], search_ctx["radius"], search_ctx["insurance_plan"])
-        assert len(results) >= 0
-        mock_find.assert_called_with(search_ctx["lat"], search_ctx["lon"], search_ctx["radius"])
+        mock_find.assert_called_once_with(40.7, -74.0, 5.0)
 
-def test_real_time_network_verification(search_ctx):
+def test_network_status_realtime_verification():
     """Network status is verified in real-time via external API mocks."""
-    with patch('backend.logic.filtering.find_providers_by_radius') as mock_find, \
-         patch('backend.logic.filtering.verify_network_status') as mock_verify:
+    providers = [{"id": "p1", "rating": 4.0, "distance": 1.0}]
 
-        mock_find.return_value = [{"id": 1, "name": "Dr A"}]
+    with patch('backend.logic.ranking.find_providers_by_radius', return_value=providers) as mock_find, \
+         patch('backend.logic.ranking.verify_network_status') as mock_verify:
+
         mock_verify.return_value = "in-network"
+        filter_and_rank_providers(0, 0, 10, "PLAN_X")
 
-        filter_and_rank_providers(search_ctx["lat"], search_ctx["lon"], search_ctx["radius"], search_ctx["insurance_plan"])
-        mock_verify.assert_called_with(1, search_ctx["insurance_plan"])
+        mock_verify.assert_called_once_with("p1", "PLAN_X")
 
-def test_search_latency(search_ctx):
+def test_search_latency_performance():
     """Search latency remains under 2 seconds for all functional scenarios."""
-    # Test with 100 providers
-    with patch('backend.logic.filtering.find_providers_by_radius') as mock_find, \
-         patch('backend.logic.filtering.verify_network_status') as mock_verify:
+    import time
 
-        mock_find.return_value = [{"id": i, "distance": 1.0, "rating": 4.0} for i in range(100)]
-        mock_verify.return_value = "in-network"
+    providers = [{"id": f"p{i}", "rating": 4.0, "distance": 1.0} for i in range(100)]
+
+    def mock_find(*args, **kwargs): return providers
+    def mock_verify(pid, plan): return "in-network"
+
+    with patch('backend.logic.ranking.find_providers_by_radius', side_effect=mock_find), \
+         patch('backend.logic.ranking.verify_network_status', side_effect=mock_verify):
 
         start = time.time()
-        filter_and_rank_providers(search_ctx["lat"], search_ctx["lon"], search_ctx["radius"], search_ctx["insurance_plan"])
+        filter_and_rank_providers(0, 0, 10, "PLAN_X")
         duration = time.time() - start
+
         assert duration < 2.0
