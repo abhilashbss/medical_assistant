@@ -105,10 +105,14 @@ def verify_network_status(provider_id: str, insurance_carrier: str, plan_type: s
     Exported function to verify network status.
     Returns 'In-Network' or 'Out-of-Network'.
     """
-    request = InsuranceVerificationRequest(
-        provider_id=provider_id,
-        insurance_carrier=insurance_carrier,
-        plan_type=plan_type
-    )
-    response = _client.verify_network_status(request)
-    return response.status
+    try:
+        request = InsuranceVerificationRequest(
+            provider_id=provider_id,
+            insurance_carrier=insurance_carrier,
+            plan_type=plan_type
+        )
+        response = _client.verify_network_status(request)
+        return response.status
+    except Exception as e:
+        logger.error(f"Unexpected error in verify_network_status: {str(e)}")
+        return "Out-of-Network"
