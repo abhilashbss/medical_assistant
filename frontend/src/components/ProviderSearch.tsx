@@ -26,8 +26,12 @@ export const ProviderSearch: React.FC<ProviderSearchProps> = ({ insuranceCarrier
     try {
       const data = await fetchProviders(filters, insuranceCarrier, planType);
       setResults(data);
-    } catch (err) {
-      setError('Failed to search for providers. Please try again.');
+    } catch (err: any) {
+      if (err.message?.includes('insurance network status') || err.status === 500) {
+        setError('Unable to verify insurance network status. Please try again later.');
+      } else {
+        setError('Failed to search for providers. Please try again.');
+      }
     } finally {
       setIsLoading(false);
     }
@@ -117,7 +121,10 @@ export const ProviderSearch: React.FC<ProviderSearchProps> = ({ insuranceCarrier
       ) : error ? (
         <div className="text-red-600 p-4 bg-red-50 rounded border border-red-200">{error}</div>
       ) : results.length === 0 ? (
-        <div className="text-center p-12 text-gray-500">No providers found matching your criteria.</div>
+        <div className="text-center p-12 text-gray-500">
+          <p>No in-network providers found for your plan in this area.</p>
+          <p className="text-sm mt-2">Try expanding your search radius to find more providers.</p>
+        </div>
       ) : (
         <div className="grid grid-cols-1 gap-4">
           {sortedResults.map(provider => (
