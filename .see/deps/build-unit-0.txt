@@ -1,0 +1,3 @@
+cryptography
+geoalchemy2
+psycopg2-binary
