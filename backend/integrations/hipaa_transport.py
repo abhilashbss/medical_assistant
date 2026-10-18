@@ -42,7 +42,7 @@ class HIPAATransport:
             return False
 
         parsed = urlparse(url)
-        return parsed.netloc in self.allowed_domains
+        return parsed.hostname in self.allowed_domains
 
     def safe_request(self, method: str, url: str, payload: Dict[str, Any] = None, headers: Dict[str, Any] = None) -> requests.Response:
         """
@@ -51,10 +51,9 @@ class HIPAATransport:
         if not self._is_allowed_url(url):
             raise ValueError(f"URL {url} is not in the allowed domains list.")
 
-        # PHI protection: Log only the base domain/path, no query params
+        # PHI protection: Log only the hostname, no path or query params
         parsed = urlparse(url)
-        safe_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-        logger.info(f"Executing {method} request to {safe_url}")
+        logger.info(f"Executing {method} request to {parsed.hostname}")
 
         try:
             response = self.session.request(
