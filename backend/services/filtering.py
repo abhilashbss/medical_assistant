@@ -29,7 +29,7 @@ def filter_in_network_providers(providers, carrier, plan):
         except Exception as e:
             # HIPAA Compliance: Log the error but NOT the patient's insurance details (carrier/plan)
             # or the provider's PHI.
-            logger.error(f"Insurance verification failed for provider {provider_id}: {str(e)}")
+            logger.error(f"Insurance verification failed for provider {provider_id}")
             # Fallback: Treat as out-of-network if API is unreachable or fails
             continue
 
