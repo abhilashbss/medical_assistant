@@ -15,6 +15,10 @@ class InsuranceVerificationRequest:
     insurance_carrier: str
     plan_type: str
 
+class InsuranceVerificationError(Exception):
+    """Exception raised when insurance verification fails due to API or transport errors."""
+    pass
+
 @dataclass
 class InsuranceVerificationResponse:
     provider_id: str
@@ -88,13 +92,9 @@ class InsuranceClient:
 
             return verification_resp
 
-        except Exception:
-            logger.error("Network verification failed due to an internal or external error")
-            return InsuranceVerificationResponse(
-                provider_id=request.provider_id,
-                status="Out-of-Network",
-                verified_at=time.time()
-            )
+        except Exception as e:
+            logger.error(f"Network verification failed: {type(e).__name__}")
+            raise InsuranceVerificationError(f"Failed to verify network status: {str(e)}") from e
 
 # Singleton instance for easy import by siblings
 _default_transport = HIPAATransport(allowed_domains={"api.insurance-carrier.com"})
@@ -115,4 +115,4 @@ def verify_network_status(provider_id: str, insurance_carrier: str, plan_type: s
         return response.status
     except Exception:
         logger.error("Unexpected error in verify_network_status: internal verification failure")
-        return "Out-of-Network"
+        raise
