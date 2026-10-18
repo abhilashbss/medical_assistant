@@ -1,5 +1,5 @@
 import pytest
-from backend.services.ranking import rank_providers
+from backend.services.ranking_engine import rank_and_filter_providers as rank_providers
 
 def test_rank_providers_sorting():
     """Verify that providers are sorted by score in descending order."""

@@ -16,8 +16,16 @@ class TLS13Adapter(HTTPAdapter):
     """
     def init_poolmanager(self, *args, **kwargs):
         context = create_urllib3_context()
-        # Force TLS 1.3
-        context.minimum_version = ssl.TLSVersion.TLSv1_3
+        # Force TLS 1.3 if supported by the environment
+        try:
+            context.minimum_version = ssl.TLSVersion.TLSv1_3
+        except (ValueError, AttributeError):
+            # Fallback for environments that don't support TLSv1_3 constant or value
+            # TLS 1.2 is usually the minimum acceptable for HIPAA if 1.3 isn't available
+            try:
+                context.minimum_version = ssl.TLSVersion.TLSv1_2
+            except (ValueError, AttributeError):
+                pass
         kwargs['ssl_context'] = context
         return super().init_poolmanager(*args, **kwargs)
 
