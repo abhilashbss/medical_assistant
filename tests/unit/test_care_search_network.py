@@ -1,50 +1,67 @@
 import pytest
 from unittest.mock import patch
-from backend.services.filtering import filter_in_network_providers
+from backend.logic.filtering import filter_and_rank_providers
 
-# Mocks for sibling services
-try:
-    from backend.services.geospatial import find_providers_in_radius
-except ImportError:
-    import sys
-    import os
-    sys.path.append(os.path.join(os.getcwd(), ".see/mocks"))
-    try:
-        from backend.services.geospatial import find_providers_in_radius
-    except ImportError:
-        def find_providers_in_radius(lat, lon, radius_km):
-            return [{"id": 1, "name": "Mock P1", "lat": lat, "lon": lon}]
-
-@pytest.fixture
-def providers():
-    return [{"id": 1, "name": "P1"}, {"id": 2, "name": "P2"}]
-
-def test_provider_search_returns_only_in_network_results(providers):
+def test_filter_only_in_network():
     """Provider search returns only in-network results for the selected insurance plan."""
-    with patch('backend.services.filtering.verify_network_status') as mock_verify:
-        mock_verify.side_effect = lambda p_id, c, pl: "in-network" if p_id == 1 else "out-of-network"
-        results = filter_in_network_providers(providers, "CarrierA", "PlanA")
+    # Mock find_providers_by_radius to return 3 providers
+    # Mock verify_network_status to return 'in-network' for only one of them
+    with patch('backend.logic.filtering.find_providers_by_radius') as mock_find, \
+         patch('backend.logic.filtering.verify_network_status') as mock_verify:
+
+        mock_find.return_value = [
+            {"id": 1, "name": "Dr. A", "distance": 1.0, "rating": 4.0},
+            {"id": 2, "name": "Dr. B", "distance": 1.0, "rating": 4.0},
+            {"id": 3, "name": "Dr. C", "distance": 1.0, "rating": 4.0},
+        ]
+
+        # ID 1: in-network, ID 2: out-of-network, ID 3: unverified/other
+        mock_verify.side_effect = lambda pid, plan: 'in-network' if pid == 1 else 'out-of-network'
+
+        results = filter_and_rank_providers(0, 0, 10, "PLAN_X")
+
         assert len(results) == 1
         assert results[0]["id"] == 1
 
-def test_network_verification_api_diverse_combinations(providers):
+def test_verify_network_status_api_combinations():
     """Network verification API calls return correct status for diverse carrier/plan combinations."""
-    with patch('backend.services.filtering.verify_network_status') as mock_verify:
-        mock_verify.side_effect = lambda p_id, c, pl: "in-network" if (c == "CarrierA" and p_id == 1) or (c == "CarrierB" and p_id == 2) else "out-of-network"
+    # This is primarily testing the integration point in filtering.py
+    with patch('backend.logic.filtering.find_providers_by_radius') as mock_find, \
+         patch('backend.logic.filtering.verify_network_status') as mock_verify:
 
-        res1 = filter_in_network_providers(providers, "CarrierA", "PlanA")
-        assert [p["id"] for p in res1] == [1]
+        mock_find.return_value = [{"id": 1, "name": "Dr. A", "distance": 1.0, "rating": 4.0}]
 
-        res2 = filter_in_network_providers(providers, "CarrierB", "PlanA")
-        assert [p["id"] for p in res2] == [2]
+        # Scenario 1: In-network
+        mock_verify.return_value = 'in-network'
+        assert len(filter_and_rank_providers(0, 0, 10, "PLAN_A")) == 1
 
-def test_geospatial_queries_filter_radius():
+        # Scenario 2: Out-of-network
+        mock_verify.return_value = 'out-of-network'
+        assert len(filter_and_rank_providers(0, 0, 10, "PLAN_B")) == 0
+
+def test_geospatial_radius_filtering():
     """Geospatial queries correctly filter providers within the specified radius."""
-    results = find_providers_in_radius(40.0, -70.0, 10)
-    assert len(results) >= 0
+    with patch('backend.logic.filtering.find_providers_by_radius') as mock_find, \
+         patch('backend.logic.filtering.verify_network_status') as mock_verify:
 
-def test_verification_logic_handles_api_failures(providers):
+        # The radius filtering is actually handled by find_providers_by_radius (sibling unit)
+        # But we verify that our engine passes the radius correctly and uses the results
+        mock_find.return_value = [{"id": 1, "name": "Dr. A", "distance": 1.0, "rating": 4.0}]
+        mock_verify.return_value = 'in-network'
+
+        filter_and_rank_providers(40.7128, -74.0060, 5, "PLAN_A")
+        mock_find.assert_called_once_with(40.7128, -74.0060, 5)
+
+def test_verification_logic_fallback():
     """Verification logic handles API timeouts or failures with appropriate fallback errors."""
-    with patch('backend.services.filtering.verify_network_status', side_effect=Exception("Timeout")):
-        results = filter_in_network_providers(providers, "CarrierA", "PlanA")
+    with patch('backend.logic.filtering.find_providers_by_radius') as mock_find, \
+         patch('backend.logic.filtering.verify_network_status') as mock_verify:
+
+        mock_find.return_value = [{"id": 1, "name": "Dr. A", "distance": 1.0, "rating": 4.0}]
+
+        # Mock API failure (exception)
+        mock_verify.side_effect = Exception("API Timeout")
+
+        # Should treat as out-of-network (empty list)
+        results = filter_and_rank_providers(0, 0, 10, "PLAN_A")
         assert len(results) == 0
