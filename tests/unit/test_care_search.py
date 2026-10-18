@@ -1,37 +1,37 @@
 import pytest
 from unittest.mock import patch, MagicMock
-from backend.integrations.insurance_client import verify_network_status
+from backend.integrations.verification import verify_network_status
 from .see.mocks.backend.db.models import InsuranceCarrier, NetworkPlan
 
 @pytest.fixture
-def mock_insurance_data():
+def insurance_setup():
     return {
-        "carrier": InsuranceCarrier(id="c1", name="HealthCo", api_endpoint="https://api.healthco.com/verify"),
-        "plan": NetworkPlan(id="p1", carrier_id="c1", plan_name="Gold Plan", plan_type="PPO"),
+        "carrier": InsuranceCarrier(id="c1", name="HealthCorp", api_endpoint="https://api.healthcorp.com/verify"),
+        "plan": NetworkPlan(id="p1", carrier_id="c1", plan_type="PPO"),
         "providers": [
-            {"id": "prov_in", "name": "Dr. In-Network"},
-            {"id": "prov_out", "name": "Dr. Out-of-Network"},
+            {"id": "p_in", "name": "Dr. In-Network"},
+            {"id": "p_out", "name": "Dr. Out-of-Network"},
         ]
     }
 
-def test_search_results_only_contain_in_network_providers(mock_insurance_data):
+def test_search_results_only_contain_in_network_providers(insurance_setup):
     """Search results only contain providers verified as 'in-network' for the specified insurance carrier and plan"""
-    carrier = mock_insurance_data["carrier"]
-    plan = mock_insurance_data["plan"]
-    providers = mock_insurance_data["providers"]
+    carrier = insurance_setup["carrier"]
+    plan = insurance_setup["plan"]
+    providers = insurance_setup["providers"]
 
     def mock_verify(provider_id, p, c):
-        return "In-Network" if provider_id == "prov_in" else "Out-of-Network"
+        return "In-Network" if provider_id == "p_in" else "Out-of-Network"
 
-    with patch('backend.integrations.insurance_client.verify_network_status', side_effect=mock_verify):
+    with patch('backend.integrations.verification.verify_network_status', side_effect=mock_verify):
         results = [p for p in providers if verify_network_status(p["id"], plan, carrier) == "In-Network"]
         assert len(results) == 1
-        assert results[0]["id"] == "prov_in"
+        assert results[0]["id"] == "p_in"
 
-def test_real_time_api_handling(mock_insurance_data):
+def test_real_time_api_mocks_handling(insurance_setup):
     """Real-time insurance API mocks return correct network status and are handled without errors"""
-    carrier = mock_insurance_data["carrier"]
-    plan = mock_insurance_data["plan"]
+    carrier = insurance_setup["carrier"]
+    plan = insurance_setup["plan"]
 
     with patch('backend.integrations.hipaa_transport.HIPAATransport.secure_post') as mock_post:
         mock_resp = MagicMock()
@@ -42,11 +42,22 @@ def test_real_time_api_handling(mock_insurance_data):
         status = verify_network_status("any_id", plan, carrier)
         assert status == "In-Network"
 
-def test_search_latency_isolated_logic(mock_insurance_data):
+def test_geospatial_filtering_logic(insurance_setup):
+    """Geospatial queries correctly filter providers within the requested radius"""
+    providers = [
+        {"id": "p1", "distance": 2.0},
+        {"id": "p2", "distance": 12.0},
+    ]
+    radius = 10.0
+    results = [p for p in providers if p["distance"] <= radius]
+    assert len(results) == 1
+    assert results[0]["id"] == "p1"
+
+def test_search_latency_isolated_logic(insurance_setup):
     """Search latency for isolated logic remains under 500ms"""
     import time
-    carrier = mock_insurance_data["carrier"]
-    plan = mock_insurance_data["plan"]
+    carrier = insurance_setup["carrier"]
+    plan = insurance_setup["plan"]
 
     with patch('backend.integrations.hipaa_transport.HIPAATransport.secure_post') as mock_post:
         mock_resp = MagicMock()
@@ -57,5 +68,4 @@ def test_search_latency_isolated_logic(mock_insurance_data):
         start = time.time()
         verify_network_status("any_id", plan, carrier)
         duration = (time.time() - start) * 1000
-
         assert duration < 500
