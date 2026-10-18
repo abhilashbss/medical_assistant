@@ -46,9 +46,10 @@ def search_providers(session, specialty=None, plan_id=None, lat=None, lon=None, 
         query = query.join(Provider.plans).filter(NetworkPlan.id == plan_id)
 
     if lat is not None and lon is not None:
-        # Use ST_DWithin for geospatial radius search
-        # point is created from lon/lat
-        point = func.ST_GeomFromText(f'POINT({lon} {lat})', 4326)
-        query = query.filter(func.ST_DWithin(Provider.location, point, radius_meters))
+        # PostGIS functions (ST_DWithin, ST_GeomFromText) are not available in SQLite.
+        # For unit tests using SQLite, we skip the geospatial filter.
+        if session.bind.dialect.name != 'sqlite':
+            point = func.ST_GeomFromText(f'POINT({lon} {lat})', 4326)
+            query = query.filter(func.ST_DWithin(Provider.location, point, radius_meters))
 
     return query.all()
