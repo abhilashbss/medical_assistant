@@ -1,0 +1,132 @@
+from sqlalchemy import Column, Integer, String, ForeignKey, Table, Boolean, Index, create_engine, text, func, TypeDecorator
+from sqlalchemy.orm import relationship, declarative_base, sessionmaker, scoped_session
+from geoalchemy2 import Geometry
+from .encryption import encrypt_phi, decrypt_phi
+
+Base = declarative_base()
+
+class PHIColumn(TypeDecorator):
+    """
+    SQLAlchemy TypeDecorator that automatically encrypts PHI on write
+    and decrypts PHI on read.
+    """
+    impl = String
+
+    def process_bind_param(self, value, dialect):
+        return encrypt_phi(value) if value is not None else None
+
+    def process_result_value(self, value, dialect):
+        return decrypt_phi(value) if value is not None else None
+
+# Junction table for many-to-many relationship between Providers and NetworkPlans
+provider_networks = Table(
+    'provider_networks',
+    Base.metadata,
+    Column('provider_id', Integer, ForeignKey('providers.id'), primary_key=True),
+    Column('plan_id', Integer, ForeignKey('insurance_plans.id'), primary_key=True),
+    Column('is_in_network', Boolean, default=True, nullable=False),
+    Column('network_tier', String(50)), # e.g., 'Tier 1', 'Preferred'
+)
+
+class InsuranceCarrier(Base):
+    __tablename__ = 'insurance_carriers'
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(255), nullable=False, unique=True)
+    payer_id = Column(String(100), nullable=False, unique=True)
+
+    plans = relationship("NetworkPlan", back_populates="carrier")
+
+class NetworkPlan(Base):
+    __tablename__ = 'insurance_plans'
+
+    id = Column(Integer, primary_key=True)
+    carrier_id = Column(Integer, ForeignKey('insurance_carriers.id'), nullable=False)
+    plan_name = Column(String(255), nullable=False)
+    plan_type = Column(String(100)) # e.g., 'PPO', 'HMO', 'EPO'
+    tier = Column(String(50)) # e.g., 'Gold', 'Silver'
+
+    carrier = relationship("InsuranceCarrier", back_populates="plans")
+    providers = relationship("Provider", secondary=provider_networks, back_populates="plans")
+
+class Provider(Base):
+    __tablename__ = 'providers'
+
+    id = Column(Integer, primary_key=True)
+    npi = Column(String(10), nullable=False, unique=True) # National Provider Identifier
+    name = Column(String(255), nullable=False)
+    specialty = Column(String(255), nullable=False)
+    address = Column(String(500))
+
+    # Geospatial location (Point: longitude, latitude)
+    # SRID 4326 is the standard for GPS coordinates (WGS 84)
+    location = Column(Geometry('POINT', srid=4326), nullable=False)
+
+    plans = relationship("NetworkPlan", secondary=provider_networks, back_populates="providers")
+
+    # Geospatial index for radius searches
+    __table_args__ = (
+        Index('ix_provider_location', 'location', postgresql_using='gist'),
+    )
+
+class Patient(Base):
+    """
+    Patient table to demonstrate HIPAA compliance for PHI.
+    """
+    __tablename__ = 'patients'
+
+    id = Column(Integer, primary_key=True)
+    full_name = Column(PHIColumn)
+    ssn = Column(PHIColumn)
+    date_of_birth = Column(PHIColumn)
+
+# Global engine and session factory
+_engine = None
+_SessionFactory = None
+
+def init_db(db_url: str):
+    """
+    Initializes the database schema.
+    Enables PostGIS extension if it's a PostgreSQL database.
+    """
+    global _engine, _SessionFactory
+    _engine = create_engine(db_url)
+    _SessionFactory = scoped_session(sessionmaker(bind=_engine))
+
+    if _engine.dialect.name == 'postgresql':
+        with _engine.connect() as conn:
+            # Enable PostGIS extension
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS postgis;"))
+            conn.commit()
+
+    # Create all tables defined in this module
+    Base.metadata.create_all(_engine)
+    return _engine
+
+def get_db_session():
+    """
+    Returns a new database session.
+    """
+    if _SessionFactory is None:
+        raise RuntimeError("Database not initialized. Call init_db(url) first.")
+    return _SessionFactory()
+
+def search_providers(session, specialty=None, plan_id=None, lat=None, lon=None, radius_meters=5000):
+    """
+    Searches for providers based on specialty, insurance plan, and location.
+    """
+    query = session.query(Provider)
+
+    if specialty:
+        query = query.filter(Provider.specialty == specialty)
+
+    if plan_id:
+        query = query.join(Provider.plans).filter(NetworkPlan.id == plan_id)
+
+    if lat is not None and lon is not None:
+        # Use ST_DWithin for geospatial radius search
+        # point is created from lon/lat
+        point = func.ST_GeomFromText(f'POINT({lon} {lat})', 4326)
+        query = query.filter(func.ST_DWithin(Provider.location, point, radius_meters))
+
+    return query.all()
