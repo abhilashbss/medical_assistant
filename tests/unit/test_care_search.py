@@ -2,48 +2,51 @@ import pytest
 from unittest.mock import MagicMock, patch
 from backend.integrations.insurance_client import verify_network_status
 
-def test_care_search_insurance_filtering():
+# Since app.search is a sibling, we mock the provider discovery part
+# and focus on the insurance filtering logic which depends on our unit.
+
+def test_care_search_filters_in_network_providers():
     """Search results only contain providers verified as 'in-network' for the specified insurance carrier and plan"""
-    with patch('backend.integrations.insurance_client._client.verify_network_status') as mock_verify:
-        # Setup: Provider 1 is in-network, Provider 2 is out-of-network
+    # Mocking the provider discovery to return a list of providers
+    mock_providers = [
+        {"id": "p1", "name": "Dr. In-Network"},
+        {"id": "p2", "name": "Dr. Out-of-Network"},
+    ]
+
+    with patch('backend.integrations.insurance_client._client.verify_network_status') as mock_client_verify:
+        # Mock the response object
+        mock_resp = MagicMock()
+
         def side_effect(request):
-            mock_resp = MagicMock()
-            mock_resp.status = "In-Network" if request.provider_id == "prov_in" else "Out-of-Network"
+            mock_resp.status = "In-Network" if request.provider_id == "p1" else "Out-of-Network"
             return mock_resp
 
-        mock_verify.side_effect = side_effect
+        mock_client_verify.side_effect = side_effect
 
-        # Simulating the search logic that would be in app.search
-        providers = [
-            {"id": "prov_in", "name": "Dr. In-Network"},
-            {"id": "prov_out", "name": "Dr. Out-Network"}
-        ]
+        # Simulate the filtering logic that the sibling's app.search would implement
+        results = [p for p in mock_providers if verify_network_status(p["id"], "BlueCross", "PPO") == "In-Network"]
 
-        verified_providers = [
-            p for p in providers
-            if verify_network_status(p["id"], "BlueCross", "PPO") == "In-Network"
-        ]
+        assert len(results) == 1
+        assert results[0]["id"] == "p1"
 
-        assert len(verified_providers) == 1
-        assert verified_providers[0]["id"] == "prov_in"
-
-def test_care_search_api_errors():
+def test_care_search_handles_api_errors_gracefully():
     """Real-time insurance API mocks return correct network status and are handled without errors"""
-    with patch('backend.integrations.insurance_client._client.verify_network_status') as mock_verify:
-        # Setup: API returns an error (which the client handles by returning Out-of-Network)
-        mock_verify.side_effect = Exception("API Timeout")
+    with patch('backend.integrations.insurance_client._client.verify_network_status') as mock_client_verify:
+        # Force a crash in the client to test the exported function's fail-safe
+        mock_client_verify.side_effect = Exception("API Timeout")
 
-        # Should not raise exception, should return Out-of-Network
-        status = verify_network_status("prov_123", "BlueCross", "PPO")
+        # This should not raise an exception because of our fail-safe wrapper
+        status = verify_network_status("p1", "BlueCross", "PPO")
         assert status == "Out-of-Network"
 
-def test_care_search_latency():
+def test_care_search_latency_isolated():
     """Search latency for isolated logic remains under 500ms"""
     import time
-
     start = time.time()
-    # Test the core verification logic
-    verify_network_status("prov_123", "BlueCross", "PPO")
+    # Call the function multiple times to check average latency
+    for _ in range(10):
+        verify_network_status("p1", "BlueCross", "PPO")
     end = time.time()
 
-    assert (end - start) * 1000 < 500
+    avg_latency = (end - start) / 10
+    assert avg_latency < 0.5
