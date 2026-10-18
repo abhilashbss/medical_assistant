@@ -4,7 +4,25 @@ from typing import List, Tuple
 try:
     from backend.db.schema import Provider, get_db_session
 except ImportError:
-    from .see.mocks.backend.db.schema import Provider, get_db_session
+    import sys
+    import os
+    # Add root to path to allow importing from .see.mocks
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    if root not in sys.path:
+        sys.path.insert(0, root)
+
+    # Use absolute import from .see.mocks
+    try:
+        from .see.mocks.backend.db.schema import Provider, get_db_session
+    except ImportError:
+        # Fallback to importing via the root path
+        import importlib.util
+        mock_path = os.path.join(root, ".see/mocks/backend/db/schema.py")
+        spec = importlib.util.spec_from_file_location("backend.db.schema", mock_path)
+        mock_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mock_module)
+        Provider = mock_module.Provider
+        get_db_session = mock_module.get_db_session
 
 class GeospatialService:
     def find_nearby_providers(

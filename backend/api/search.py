@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Any
 from flask import Flask, request, jsonify
 from backend.services.geospatial import geospatial_service
 
