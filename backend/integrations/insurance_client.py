@@ -70,7 +70,10 @@ class InsuranceClient:
             )
 
             data = response.json()
-            status = data.get("status", "Out-of-Network")
+            # Standardize response format from different carriers
+            status = data.get("status", "Out-of-Network").strip().title()
+            if status not in ["In-Network", "Out-of-Network"]:
+                status = "Out-of-Network"
 
             verification_resp = InsuranceVerificationResponse(
                 provider_id=request.provider_id,
