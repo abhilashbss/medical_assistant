@@ -1,9 +1,23 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, Table, Boolean, Index
+from sqlalchemy import Column, Integer, String, ForeignKey, Table, Boolean, Index, TypeDecorator
 from sqlalchemy.orm import relationship, declarative_base
 from geoalchemy2 import Geometry
 from sqlalchemy import text
+from .encryption import encrypt_phi, decrypt_phi
 
 Base = declarative_base()
+
+class PHIColumn(TypeDecorator):
+    """
+    SQLAlchemy TypeDecorator that automatically encrypts PHI on write
+    and decrypts PHI on read.
+    """
+    impl = String
+
+    def process_bind_param(self, value, dialect):
+        return encrypt_phi(value) if value is not None else None
+
+    def process_result_value(self, value, dialect):
+        return decrypt_phi(value) if value is not None else None
 
 # Junction table for many-to-many relationship between Providers and NetworkPlans
 provider_networks = Table(
@@ -60,11 +74,3 @@ class Provider(Base):
         Index('ix_provider_location', 'location', postgresql_using='gist'),
     )
 
-class PHIColumn:
-    """
-    A descriptor or wrapper to mark columns that contain PHI.
-    In a real implementation, this would integrate with the encryption layer
-    to automatically encrypt/decrypt during SQLAlchemy load/save.
-    """
-    def __init__(self, column_name):
-        self.column_name = column_name

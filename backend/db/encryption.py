@@ -4,7 +4,10 @@ import os
 # In a real production environment, this key would be managed by a secure
 # Key Management Service (KMS) like AWS KMS, GCP KMS, or HashiCorp Vault.
 # For this implementation, we use an environment variable.
-ENCRYPTION_KEY = os.environ.get("PHI_ENCRYPTION_KEY", Fernet.generate_key().decode())
+ENCRYPTION_KEY = os.environ.get("PHI_ENCRYPTION_KEY")
+if not ENCRYPTION_KEY:
+    raise RuntimeError("PHI_ENCRYPTION_KEY environment variable must be set for HIPAA compliance")
+
 cipher_suite = Fernet(ENCRYPTION_KEY.encode())
 
 def encrypt_phi(data: str) -> str:
