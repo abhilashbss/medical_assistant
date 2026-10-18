@@ -10,7 +10,6 @@ def test_filter_only_in_network():
         {"id": "p3", "name": "Dr. In2"},
     ]
 
-    # Mock verify_network_status to return 'in-network' for p1, p3 and 'out-of-network' for p2
     def mock_verify(provider_id, carrier, plan):
         return "in-network" if provider_id in ["p1", "p3"] else "out-of-network"
 
