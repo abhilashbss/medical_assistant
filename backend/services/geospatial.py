@@ -40,11 +40,11 @@ class GeospatialService:
         user_location = (lat, lng)
 
         for provider in providers:
-            # Filter by specialty
-            if specialty and provider.specialty.lower() != specialty.lower():
+            # Filter by specialty (case-insensitive)
+            if specialty and specialty.lower() not in provider.specialty.lower():
                 continue
 
-            # Filter by name/query
+            # Filter by name/query (case-insensitive)
             if query and query.lower() not in provider.name.lower():
                 continue
 
