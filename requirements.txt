@@ -2,3 +2,7 @@ cryptography
 geoalchemy2
 psycopg2-binary
 shapely
+flask
+geopy
+shapely
+geoalchemy2

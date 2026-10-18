@@ -87,6 +87,12 @@ class Provider(Base):
 
     plans = relationship("NetworkPlan", secondary=provider_networks, back_populates="providers")
 
+    @property
+    def insurance_network(self):
+        if self.plans:
+            return self.plans[0].carrier.name
+        return "Unknown"
+
     # Geospatial index for radius searches
     __table_args__ = (
         Index('ix_provider_location', 'location', postgresql_using='gist'),
