@@ -1,32 +1,60 @@
 import requests
 import logging
-from typing import Any, Dict
+import ssl
+from typing import Any, Dict, Set
 from requests.adapters import HTTPAdapter
 from urllib3.util.ssl_ import create_urllib3_context
+from urllib.parse import urlparse
 
 # Configure logging to avoid PHI leakage
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+class TLS13Adapter(HTTPAdapter):
+    """
+    HTTPAdapter that forces TLS 1.3.
+    """
+    def init_poolmanager(self, *args, **kwargs):
+        context = create_urllib3_context()
+        # Force TLS 1.3
+        context.minimum_version = ssl.TLSVersion.TLSv1_3
+        kwargs['ssl_context'] = context
+        return super().init_poolmanager(*args, **kwargs)
+
 class HIPAATransport:
     """
-    HIPAA-compliant transport layer ensuring TLS 1.3 and no PHI logging.
+    HIPAA-compliant transport layer ensuring TLS 1.3, SSRF protection, and no PHI logging.
     """
-    def __init__(self, timeout: float = 0.5):
+    def __init__(self, timeout: float = 0.5, allowed_domains: Set[str] = None):
         self.timeout = timeout
+        self.allowed_domains = allowed_domains or set()
         self.session = requests.Session()
 
-        # Force TLS 1.3 if supported by the environment
-        # In modern requests/urllib3, this is often default, but we can be explicit
-        adapter = HTTPAdapter()
+        # Force TLS 1.3
+        adapter = TLS13Adapter()
         self.session.mount("https://", adapter)
+
+    def _is_allowed_url(self, url: str) -> bool:
+        """
+        Validates that the URL is using HTTPS and belongs to an allowed domain.
+        """
+        if not url.startswith("https://"):
+            return False
+
+        parsed = urlparse(url)
+        return parsed.netloc in self.allowed_domains
 
     def safe_request(self, method: str, url: str, payload: Dict[str, Any] = None, headers: Dict[str, Any] = None) -> requests.Response:
         """
-        Executes an HTTP request without logging PHI.
+        Executes an HTTP request without logging PHI and with SSRF protection.
         """
-        # PHI protection: Do not log the payload
-        logger.info(f"Executing {method} request to {url}")
+        if not self._is_allowed_url(url):
+            raise ValueError(f"URL {url} is not in the allowed domains list.")
+
+        # PHI protection: Log only the base domain/path, no query params
+        parsed = urlparse(url)
+        safe_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+        logger.info(f"Executing {method} request to {safe_url}")
 
         try:
             response = self.session.request(
