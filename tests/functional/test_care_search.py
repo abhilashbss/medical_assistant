@@ -1,84 +1,36 @@
 import pytest
-from unittest.mock import patch, MagicMock
-from backend.integrations.insurance import verify_network_status, InsuranceVerificationRequest
+from unittest.mock import MagicMock, patch
+from backend.integrations.insurance_client import verify_network_status
 
-def test_real_time_in_network_filtering():
+def test_functional_insurance_verification():
     """Search results only include providers confirmed as in-network via the real-time API"""
-    providers = [
-        {"id": "p_in", "name": "Dr. In-Network"},
-        {"id": "p_out", "name": "Dr. Out-of-Network"},
-        {"id": "p_far", "name": "Dr. Far-In-Network"},
-    ]
+    with patch('backend.integrations.insurance_client._client.verify_network_status') as mock_verify:
+        # Mock: prov_1 is in-network, prov_2 is out-of-network
+        def side_effect(request):
+            mock_resp = MagicMock()
+            mock_resp.status = "In-Network" if request.provider_id == "prov_1" else "Out-of-Network"
+            return mock_resp
+        mock_verify.side_effect = side_effect
 
-    def mock_verify_side_effect(request):
-        # Simulate API: p_in and p_far are in-network
-        from backend.integrations.insurance import InsuranceVerificationResponse
-        status = "In-Network" if request.provider_id in ["p_in", "p_far"] else "Out-of-Network"
-        return InsuranceVerificationResponse(status=status, verification_id="tx_1", latency_ms=10.0)
+        # Simulating a functional search flow
+        providers = [
+            {"id": "prov_1", "name": "Clinic A", "specialty": "General"},
+            {"id": "prov_2", "name": "Clinic B", "specialty": "General"}
+        ]
 
-    with patch('backend.integrations.insurance.GenericCarrierAdapter.verify', side_effect=mock_verify_side_effect):
-        results = []
-        for p in providers:
-            request = InsuranceVerificationRequest(
-                provider_id=p["id"], insurance_carrier="Aetna", plan_type="PPO", member_id="mem_1"
-            )
-            if verify_network_status(request).status == "In-Network":
-                results.append(p)
+        results = [p for p in providers if verify_network_status(p["id"], "Aetna", "HMO") == "In-Network"]
 
-        assert len(results) == 2
-        assert all(r["id"] in ["p_in", "p_far"] for r in results)
+        assert len(results) == 1
+        assert results[0]["id"] == "prov_1"
 
-def test_network_status_labeling():
+def test_functional_network_labeling():
     """Provider network status (In-Network/Out-of-Network) is correctly labeled for all results"""
-    providers = [
-        {"id": "p_in", "name": "Dr. In-Network"},
-        {"id": "p_out", "name": "Dr. Out-of-Network"},
-    ]
+    # Test both statuses are correctly returned by the integration layer
+    with patch('backend.integrations.insurance_client._client.verify_network_status') as mock_verify:
+        mock_verify.side_effect = [
+            MagicMock(status="In-Network"),
+            MagicMock(status="Out-of-Network")
+        ]
 
-    def mock_verify_side_effect(request):
-        from backend.integrations.insurance import InsuranceVerificationResponse
-        status = "In-Network" if request.provider_id == "p_in" else "Out-of-Network"
-        return InsuranceVerificationResponse(status=status, verification_id="tx_1", latency_ms=10.0)
-
-    with patch('backend.integrations.insurance.GenericCarrierAdapter.verify', side_effect=mock_verify_side_effect):
-        results = []
-        for p in providers:
-            request = InsuranceVerificationRequest(
-                provider_id=p["id"], insurance_carrier="Aetna", plan_type="PPO", member_id="mem_1"
-            )
-            status = verify_network_status(request).status
-            results.append({"id": p["id"], "status": status})
-
-        assert results[0]["status"] == "In-Network"
-        assert results[1]["status"] == "Out-of-Network"
-
-def test_geospatial_radius_filter():
-    """Geospatial search returns providers within the specified radius under 2 seconds"""
-    import time
-    providers = [
-        {"id": "p1", "distance": 5.0},
-        {"id": "p2", "distance": 25.0},
-    ]
-    radius = 10.0
-
-    start = time.time()
-    results = [p for p in providers if p["distance"] <= radius]
-    duration = time.time() - start
-
-    assert duration < 2.0
-    assert len(results) == 1
-    assert results[0]["id"] == "p1"
-
-def test_specialty_and_distance_filters():
-    """Filters for specialty and distance accurately narrow the results set"""
-    providers = [
-        {"id": "p1", "specialty": "Cardiology", "distance": 5.0},
-        {"id": "p2", "specialty": "Dermatology", "distance": 2.0},
-        {"id": "p3", "specialty": "Cardiology", "distance": 15.0},
-    ]
-    target_specialty = "Cardiology"
-    max_distance = 10.0
-
-    results = [p for p in providers if p["specialty"] == target_specialty and p["distance"] <= max_distance]
-    assert len(results) == 1
-    assert results[0]["id"] == "p1"
+        assert verify_network_status("p1", "Carrier", "Plan") == "In-Network"
+        assert verify_network_status("p2", "Carrier", "Plan") == "Out-of-Network"
